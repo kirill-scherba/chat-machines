@@ -14,8 +14,6 @@ import (
 	"time"
 )
 
-const consecutiveOKStop = 2
-
 // Agent is the interface for creating sessions and sending/receiving messages.
 // It abstracts the opencode-serve HTTP client so tests can use mocks.
 type Agent interface {
@@ -63,7 +61,7 @@ func (e *ChatEngine) SetSummarySaver(s SummarySaver) {
 }
 
 // CreateChatRoom creates and starts a chat room asynchronously.
-func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, maxRounds int, saveLog bool) (*Room, error) {
+func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, maxRounds int) (string, error) {
 	room := e.store.CreateRoom(topic, maxRounds)
 	for _, cfg := range configs {
 		p := Participant{
@@ -75,7 +73,7 @@ func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, m
 			p.Name = fmt.Sprintf("agent-%d", len(room.Participants)+1)
 		}
 		if err := e.store.AddParticipant(room.ID, p); err != nil {
-			return nil, err
+			return "", err
 		}
 	}
 
@@ -84,18 +82,29 @@ func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, m
 	e.active[room.ID] = cancel
 	e.mu.Unlock()
 
-	go e.run(ctx, room, saveLog)
-	return room, nil
+	go e.run(ctx, room)
+	return room.ID, nil
 }
 
-// GetRoom returns a room by id.
+// GetRoom returns the live room by id.
+// Prefer GetRoomSnapshot for callers that need safe concurrent reads.
 func (e *ChatEngine) GetRoom(id string) *Room {
 	return e.store.GetRoom(id)
+}
+
+// GetRoomSnapshot returns a safe snapshot of a room.
+func (e *ChatEngine) GetRoomSnapshot(id string) (RoomSnapshot, bool) {
+	return e.store.GetSnapshot(id)
 }
 
 // ListRooms returns all rooms.
 func (e *ChatEngine) ListRooms() []*Room {
 	return e.store.ListRooms()
+}
+
+// ListRoomSnapshots returns safe snapshots of all rooms.
+func (e *ChatEngine) ListRoomSnapshots() []RoomSnapshot {
+	return e.store.ListSnapshots()
 }
 
 // StopRoom stops a room gracefully.
@@ -109,6 +118,8 @@ func (e *ChatEngine) StopRoom(id string) error {
 	if !ok {
 		return fmt.Errorf("room %s is not active", id)
 	}
+	// Mark the room as stopping synchronously so MCP handlers observe a deterministic state.
+	_ = e.store.SetStatus(id, RoomStopped)
 	cancel()
 	return nil
 }
@@ -130,7 +141,7 @@ func (e *ChatEngine) StopAll() {
 }
 
 // run is the per-room goroutine.
-func (e *ChatEngine) run(ctx context.Context, room *Room, saveLog bool) {
+func (e *ChatEngine) run(ctx context.Context, room *Room) {
 	log.Printf("room %s: starting with %d participant(s)", room.ID, room.ParticipantCount())
 
 	if err := e.startRoom(room); err != nil {
@@ -151,7 +162,7 @@ func (e *ChatEngine) run(ctx context.Context, room *Room, saveLog bool) {
 		default:
 		}
 
-		if room.CurrentRound >= room.MaxRounds {
+		if room.GetCurrentRound() >= room.GetMaxRounds() {
 			log.Printf("room %s: reached max rounds", room.ID)
 			e.finishRoom(room, nil)
 			return
@@ -173,39 +184,45 @@ func (e *ChatEngine) run(ctx context.Context, room *Room, saveLog bool) {
 
 // startRoom creates opencode sessions and sends onboarding messages.
 func (e *ChatEngine) startRoom(room *Room) error {
-	room.mu.Lock()
-	defer room.mu.Unlock()
+	// Take a snapshot so we can do network calls without holding room.mu.
+	snap := room.Snapshot()
 
 	workDir := "/tmp"
-	for i := range room.Participants {
-		p := &room.Participants[i]
+	sessionIDs := make([]string, len(snap.Participants))
+	for i, p := range snap.Participants {
 		sid, err := e.agent.CreateSession(p.Name, p.Agent, p.Model, workDir)
 		if err != nil {
 			return fmt.Errorf("create session for %s: %w", p.Name, err)
 		}
-		p.SessionID = sid
+		sessionIDs[i] = sid
 	}
 
-	onboarding := buildOnboarding(room.Topic, room.Participants)
-	for i := range room.Participants {
-		p := &room.Participants[i]
-		if _, err := e.agent.SendMessage(p.SessionID, onboarding, p.Agent, p.Model); err != nil {
+	onboarding := buildOnboarding(room.Topic, snap.Participants)
+	for i, p := range snap.Participants {
+		if _, err := e.agent.SendMessage(sessionIDs[i], onboarding, p.Agent, p.Model); err != nil {
 			return fmt.Errorf("onboarding %s: %w", p.Name, err)
 		}
+	}
+
+	// Apply session IDs under lock.
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	if len(room.Participants) != len(sessionIDs) {
+		return fmt.Errorf("participants changed during session creation")
+	}
+	for i := range room.Participants {
+		room.Participants[i].SessionID = sessionIDs[i]
 	}
 	return nil
 }
 
 // runRound executes a single round. Returns true if the chat should stop due to all-OK.
 func (e *ChatEngine) runRound(room *Room) (bool, error) {
-	room.mu.Lock()
-	room.CurrentRound++
-	round := room.CurrentRound
-	participants := make([]Participant, len(room.Participants))
-	copy(participants, room.Participants)
-	room.mu.Unlock()
+	round := room.IncrementCurrentRound()
+	snap := room.Snapshot()
+	participants := snap.Participants
 
-	log.Printf("room %s: round %d/%d", room.ID, round, room.MaxRounds)
+	log.Printf("room %s: round %d/%d", room.ID, round, snap.MaxRounds)
 
 	// Build transcript from previous round messages (empty on round 1).
 	transcript := buildTranscript(room, round, participants)
@@ -254,23 +271,15 @@ func (e *ChatEngine) runRound(room *Room) (bool, error) {
 		if err := e.store.AddMessage(room.ID, msg); err != nil {
 			return false, err
 		}
-		if e.logger != nil {
-			_ = e.logger.LogMessage(room.ID, round, p.Name, resp, now)
-		}
+			if e.logger != nil {
+				_ = e.logger.LogMessage(room.ID, round, p.Name, resp, now)
+			}
 		if !IsOKResponse(resp) {
 			allOK = false
 		}
 	}
 
-	room.mu.Lock()
-	if allOK {
-		room.okRounds++
-	} else {
-		room.okRounds = 0
-	}
-	stop := room.okRounds >= consecutiveOKStop
-	room.mu.Unlock()
-
+	stop := room.UpdateOKRounds(allOK)
 	if !stop {
 		time.Sleep(e.roundDelay)
 	}

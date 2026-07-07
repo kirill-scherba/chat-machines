@@ -28,7 +28,7 @@ Available tools:
 Rules:
 - Each participant must have a unique name.
 - Use max_rounds to prevent infinite chats.
-- When a chat finishes, summaries are saved to memory-store-mcp automatically.
+- When a chat finishes, summaries are saved to memory-store-mcp automatically if a logger is configured.
 - You may participate in a chat as an adjunct: user messages go into the room, and you relay room messages back to the user.
 `
 
@@ -60,19 +60,18 @@ func resultError(err error) (*mcp.CallToolResult, error) {
 }
 
 func chatCreateTool(engine *ChatEngine) server.ServerTool {
-	t := mcp.NewTool("chat_create",
-		mcp.WithDescription("Create and start a multi-AI chat room."),
-		mcp.WithArray("participants",
-			mcp.Description("List of participant objects with name, optional agent, and optional model"),
-			mcp.Required()),
-		mcp.WithString("topic",
-			mcp.Description("Topic of the chat"),
-			mcp.Required()),
-		mcp.WithNumber("max_rounds",
-			mcp.Description("Maximum number of rounds (default: 10)")),
-		mcp.WithBoolean("save_log",
-			mcp.Description("Save full message log to SQLite (default: false)")),
-	)
+		t := mcp.NewTool("chat_create",
+			mcp.WithDescription("Create and start a multi-AI chat room."),
+			mcp.WithArray("participants",
+				mcp.Description("List of participant objects with name, optional agent, and optional model"),
+				mcp.Required()),
+			mcp.WithString("topic",
+				mcp.Description("Topic of the chat"),
+				mcp.Required()),
+			mcp.WithNumber("max_rounds",
+				mcp.Description("Maximum number of rounds (default: 10)"),
+				mcp.DefaultNumber(10)),
+		)
 	return server.ServerTool{
 		Tool: t,
 		Handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -85,11 +84,6 @@ func chatCreateTool(engine *ChatEngine) server.ServerTool {
 			maxRounds := 10
 			if v, ok := args["max_rounds"].(float64); ok {
 				maxRounds = int(v)
-			}
-
-			saveLog := false
-			if v, ok := args["save_log"].(bool); ok {
-				saveLog = v
 			}
 
 			raw, ok := args["participants"].([]any)
@@ -119,18 +113,23 @@ func chatCreateTool(engine *ChatEngine) server.ServerTool {
 				})
 			}
 
-			room, err := engine.CreateChatRoom(topic, configs, maxRounds, saveLog)
+			roomID, err := engine.CreateChatRoom(topic, configs, maxRounds)
 			if err != nil {
 				return resultError(fmt.Errorf("create chat room: %w", err))
 			}
 
-			log.Printf("mcp chat_create: room=%s participants=%d", room.ID, len(configs))
+			snap, ok := engine.GetRoomSnapshot(roomID)
+			if !ok {
+				return resultError(fmt.Errorf("room %s disappeared after creation", roomID))
+			}
+
+			log.Printf("mcp chat_create: room=%s participants=%d", snap.ID, len(configs))
 			return resultJSON(map[string]any{
-				"room_id":      room.ID,
-				"topic":        room.Topic,
+				"room_id":      snap.ID,
+				"topic":        snap.Topic,
 				"participants": configs,
-				"max_rounds":   room.MaxRounds,
-				"status":       room.Status,
+				"max_rounds":   snap.MaxRounds,
+				"status":       snap.Status,
 			})
 		},
 	}
@@ -142,7 +141,7 @@ func chatListTool(engine *ChatEngine) server.ServerTool {
 	return server.ServerTool{
 		Tool: t,
 		Handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			rooms := engine.ListRooms()
+			rooms := engine.ListRoomSnapshots()
 			out := make([]map[string]any, 0, len(rooms))
 			for _, r := range rooms {
 				out = append(out, roomSummary(r))
@@ -160,11 +159,11 @@ func chatGetTool(engine *ChatEngine) server.ServerTool {
 		Tool: t,
 		Handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			roomID, _ := req.GetArguments()["room_id"].(string)
-			room := engine.GetRoom(roomID)
-			if room == nil {
+			snap, ok := engine.GetRoomSnapshot(roomID)
+			if !ok {
 				return resultError(fmt.Errorf("room %s not found", roomID))
 			}
-			return resultJSON(roomDetail(room))
+			return resultJSON(roomDetail(snap))
 		},
 	}
 }
@@ -180,11 +179,18 @@ func chatStopTool(engine *ChatEngine) server.ServerTool {
 			if err := engine.StopRoom(roomID); err != nil {
 				return resultError(err)
 			}
-			room := engine.GetRoom(roomID)
+			snap, ok := engine.GetRoomSnapshot(roomID)
+			if !ok {
+				return resultJSON(map[string]any{
+					"room_id": roomID,
+					"status":  RoomStopped,
+					"rounds":  0,
+				})
+			}
 			return resultJSON(map[string]any{
 				"room_id": roomID,
-				"status":  room.Status,
-				"rounds":  room.CurrentRound,
+				"status":  snap.Status,
+				"rounds":  snap.CurrentRound,
 			})
 		},
 	}
@@ -196,7 +202,7 @@ func chatStatsTool(engine *ChatEngine) server.ServerTool {
 	return server.ServerTool{
 		Tool: t,
 		Handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			rooms := engine.ListRooms()
+			rooms := engine.ListRoomSnapshots()
 			totalRooms := len(rooms)
 			active := 0
 			stopped := 0
@@ -227,9 +233,7 @@ func chatStatsTool(engine *ChatEngine) server.ServerTool {
 	}
 }
 
-func roomSummary(r *Room) map[string]any {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+func roomSummary(r RoomSnapshot) map[string]any {
 	names := make([]string, len(r.Participants))
 	for i, p := range r.Participants {
 		names[i] = p.Name
@@ -244,9 +248,7 @@ func roomSummary(r *Room) map[string]any {
 	}
 }
 
-func roomDetail(r *Room) map[string]any {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+func roomDetail(r RoomSnapshot) map[string]any {
 	names := make([]string, len(r.Participants))
 	for i, p := range r.Participants {
 		names[i] = p.Name

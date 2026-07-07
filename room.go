@@ -22,6 +22,9 @@ const (
 	RoomStopped RoomStatus = "stopped"
 )
 
+// consecutiveOKStop is the number of consecutive all-OK rounds that triggers auto-stop.
+const consecutiveOKStop = 2
+
 // Participant is a single chat member backed by an opencode-serve session.
 type Participant struct {
 	Name      string
@@ -54,6 +57,70 @@ type Room struct {
 	okRounds int
 
 	mu sync.RWMutex
+}
+
+// RoomSnapshot is an immutable copy of a Room for safe concurrent reads.
+type RoomSnapshot struct {
+	ID           string        `json:"id"`
+	Topic        string        `json:"topic"`
+	Participants []Participant `json:"participants"`
+	MaxRounds    int           `json:"max_rounds"`
+	CurrentRound int           `json:"current_round"`
+	Status       RoomStatus    `json:"status"`
+	Messages     []Message     `json:"messages"`
+	CreatedAt    time.Time     `json:"created_at"`
+	StoppedAt    *time.Time    `json:"stopped_at,omitempty"`
+	OKRounds     int           `json:"ok_rounds"`
+}
+
+// Snapshot returns a deep-ish copy of the room under read lock.
+// The returned snapshot is safe to use after the lock is released.
+func (r *Room) Snapshot() RoomSnapshot {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p := make([]Participant, len(r.Participants))
+	copy(p, r.Participants)
+	m := make([]Message, len(r.Messages))
+	copy(m, r.Messages)
+	var stopped *time.Time
+	if r.StoppedAt != nil {
+		t := *r.StoppedAt
+		stopped = &t
+	}
+	return RoomSnapshot{
+		ID:           r.ID,
+		Topic:        r.Topic,
+		Participants: p,
+		MaxRounds:    r.MaxRounds,
+		CurrentRound: r.CurrentRound,
+		Status:       r.Status,
+		Messages:     m,
+		CreatedAt:    r.CreatedAt,
+		StoppedAt:    stopped,
+		OKRounds:     r.okRounds,
+	}
+}
+
+// GetSnapshot returns a snapshot of a room by id, or false if not found.
+func (s *RoomStore) GetSnapshot(id string) (RoomSnapshot, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.rooms[id]
+	if !ok {
+		return RoomSnapshot{}, false
+	}
+	return r.Snapshot(), true
+}
+
+// ListSnapshots returns snapshots of all rooms.
+func (s *RoomStore) ListSnapshots() []RoomSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]RoomSnapshot, 0, len(s.rooms))
+	for _, r := range s.rooms {
+		out = append(out, r.Snapshot())
+	}
+	return out
 }
 
 // RoomStore holds all active and completed rooms in memory.
@@ -171,6 +238,54 @@ func (r *Room) ParticipantCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.Participants)
+}
+
+// GetStatus returns the room status under lock.
+func (r *Room) GetStatus() RoomStatus {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.Status
+}
+
+// GetMaxRounds returns max rounds under lock.
+func (r *Room) GetMaxRounds() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.MaxRounds
+}
+
+// GetCurrentRound returns current round under lock.
+func (r *Room) GetCurrentRound() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.CurrentRound
+}
+
+// IncrementCurrentRound increments and returns the current round under lock.
+func (r *Room) IncrementCurrentRound() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.CurrentRound++
+	return r.CurrentRound
+}
+
+// GetOKRounds returns consecutive OK rounds under lock.
+func (r *Room) GetOKRounds() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.okRounds
+}
+
+// UpdateOKRounds updates the consecutive OK counter and returns whether stop is triggered.
+func (r *Room) UpdateOKRounds(allOK bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if allOK {
+		r.okRounds++
+	} else {
+		r.okRounds = 0
+	}
+	return r.okRounds >= consecutiveOKStop
 }
 
 // IsOKResponse reports whether a response is the OK skip marker.

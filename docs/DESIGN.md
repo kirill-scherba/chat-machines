@@ -44,10 +44,8 @@ chat-machines/
 ├── main.go              # Entrypoint: flags, MCP server startup, engine init
 ├── server.go            # MCP server setup, tool registration, system instructions
 ├── agent.go             # OpenCodeServeClient: HTTP client for opencode-serve
-├── room.go              # Room, Participant, Message, RoomStore (in-memory)
+├── room.go              # Room, Participant, Message, RoomStore, RoomSnapshot
 ├── engine.go            # ChatEngine: round-robin loop, goroutine per room
-├── tools_room.go        # MCP tools: chat_create, chat_list, chat_get
-├── tools_control.go     # MCP tools: chat_stop, chat_stats
 ├── summary.go           # Post-chat summary collection → memory-store-mcp
 ├── store.go             # Optional SQLite persistence (enabled by --db flag)
 ├── agent_test.go        # Tests for agent client
@@ -74,6 +72,12 @@ Following `memory-store-mcp` pattern: flat root layout with `package main`. All 
 Rooms, participants, and messages are stored in memory (`map[string]*Room` with `sync.RWMutex`). SQLite is optional (`--db` flag) for debugging.
 
 **Rationale:** Chat rooms are ephemeral. After completion, only the summary is persisted (to memory-store-mcp). Full message history in SQLite is a debug feature.
+
+### 2a. Room Snapshots for Safe Concurrent Reads
+
+MCP handlers and tests never read mutable `*Room` fields directly. `RoomStore` exposes `GetSnapshot(id)` and `ListSnapshots()`, which return immutable `RoomSnapshot` copies taken under the store lock.
+
+**Rationale:** The room goroutine writes to `Messages`, `CurrentRound`, and `Status` while MCP handlers read them. Snapshots eliminate this entire class of races without scattering locks in handler code.
 
 ### 3. Goroutine per Room
 
@@ -155,6 +159,12 @@ main goroutine
   │
   └── Room goroutine N ...
 ```
+
+### 2b. Global SQLite Logging
+
+Message logging to SQLite is enabled globally by the `--db` flag at server startup. There is no per-room `save_log` toggle: a single server either logs all rooms or none.
+
+**Rationale:** Avoids unused MCP parameters, keeps `chat_create` focused on chat configuration, and matches the current implementation where `ChatEngine` owns an optional `logger`.
 
 ## Configuration
 

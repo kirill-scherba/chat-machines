@@ -63,32 +63,36 @@ func TestEngineTwoParticipants(t *testing.T) {
 	engine := NewChatEngine(client)
 	defer engine.StopAll()
 
-	room, err := engine.CreateChatRoom("project status", []ParticipantConfig{
+	roomID, err := engine.CreateChatRoom("project status", []ParticipantConfig{
 		{Name: "Baron"},
 		{Name: "Manager"},
-	}, 3, false)
+	}, 3)
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
 
 	// Wait for the chat to finish.
+	var snap RoomSnapshot
 	for i := 0; i < 50; i++ {
-		room := engine.GetRoom(room.ID)
-		if room.Status == RoomStopped {
+		s, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room %s not found", roomID)
+		}
+		snap = s
+		if snap.Status == RoomStopped {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	room = engine.GetRoom(room.ID)
-	if room.Status != RoomStopped {
-		t.Fatalf("expected stopped, got %s", room.Status)
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", snap.Status)
 	}
-	if room.CurrentRound < 1 {
-		t.Fatalf("expected at least 1 round, got %d", room.CurrentRound)
+	if snap.CurrentRound < 1 {
+		t.Fatalf("expected at least 1 round, got %d", snap.CurrentRound)
 	}
-	if len(room.Messages) < 2 {
-		t.Fatalf("expected messages, got %d", len(room.Messages))
+	if len(snap.Messages) < 2 {
+		t.Fatalf("expected messages, got %d", len(snap.Messages))
 	}
 }
 
@@ -98,30 +102,34 @@ func TestEngineAutoStopOnOK(t *testing.T) {
 	engine := NewChatEngine(client)
 	defer engine.StopAll()
 
-	room, err := engine.CreateChatRoom("quiet chat", []ParticipantConfig{
+	roomID, err := engine.CreateChatRoom("quiet chat", []ParticipantConfig{
 		{Name: "A"},
 		{Name: "B"},
 		{Name: "C"},
-	}, 10, false)
+	}, 10)
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
 
+	var snap RoomSnapshot
 	for i := 0; i < 50; i++ {
-		room := engine.GetRoom(room.ID)
-		if room.Status == RoomStopped {
+		s, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room %s not found", roomID)
+		}
+		snap = s
+		if snap.Status == RoomStopped {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	room = engine.GetRoom(room.ID)
-	if room.Status != RoomStopped {
-		t.Fatalf("expected stopped, got %s", room.Status)
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", snap.Status)
 	}
 	// Should stop at round 2 because all OK for 2 rounds.
-	if room.CurrentRound != 2 {
-		t.Fatalf("expected 2 rounds (all OK), got %d", room.CurrentRound)
+	if snap.CurrentRound != 2 {
+		t.Fatalf("expected 2 rounds (all OK), got %d", snap.CurrentRound)
 	}
 }
 
@@ -134,28 +142,32 @@ func TestEngineMaxRounds(t *testing.T) {
 	engine := NewChatEngine(client)
 	defer engine.StopAll()
 
-	room, err := engine.CreateChatRoom("max rounds", []ParticipantConfig{
+	roomID, err := engine.CreateChatRoom("max rounds", []ParticipantConfig{
 		{Name: "A"},
 		{Name: "B"},
-	}, 2, false)
+	}, 2)
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
 
+	var snap RoomSnapshot
 	for i := 0; i < 50; i++ {
-		room := engine.GetRoom(room.ID)
-		if room.Status == RoomStopped {
+		s, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room %s not found", roomID)
+		}
+		snap = s
+		if snap.Status == RoomStopped {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	room = engine.GetRoom(room.ID)
-	if room.Status != RoomStopped {
-		t.Fatalf("expected stopped, got %s", room.Status)
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", snap.Status)
 	}
-	if room.CurrentRound != 2 {
-		t.Fatalf("expected 2 rounds, got %d", room.CurrentRound)
+	if snap.CurrentRound != 2 {
+		t.Fatalf("expected 2 rounds, got %d", snap.CurrentRound)
 	}
 }
 
@@ -169,25 +181,28 @@ func TestEngineStopRoom(t *testing.T) {
 	engine.SetRoundDelay(50 * time.Millisecond)
 	defer engine.StopAll()
 
-	room, err := engine.CreateChatRoom("manual stop", []ParticipantConfig{
+	roomID, err := engine.CreateChatRoom("manual stop", []ParticipantConfig{
 		{Name: "A"},
 		{Name: "B"},
-	}, 100, false)
+	}, 100)
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
 
 	// Wait for the goroutine to register itself, then stop.
 	time.Sleep(50 * time.Millisecond)
-	if err := engine.StopRoom(room.ID); err != nil {
+	if err := engine.StopRoom(roomID); err != nil {
 		t.Fatalf("stop room: %v", err)
 	}
 	// Wait for graceful shutdown and summary collection.
 	time.Sleep(300 * time.Millisecond)
 
-	room = engine.GetRoom(room.ID)
-	if room.Status != RoomStopped {
-		t.Fatalf("expected stopped, got %s", room.Status)
+	snap, ok := engine.GetRoomSnapshot(roomID)
+	if !ok {
+		t.Fatalf("room %s not found after stop", roomID)
+	}
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", snap.Status)
 	}
 }
 
@@ -196,17 +211,19 @@ func TestEngineStopAll(t *testing.T) {
 	engine := NewChatEngine(client)
 	defer engine.StopAll()
 
-	r1, _ := engine.CreateChatRoom("room1", []ParticipantConfig{{Name: "X"}, {Name: "Y"}}, 5, false)
-	r2, _ := engine.CreateChatRoom("room2", []ParticipantConfig{{Name: "P"}, {Name: "Q"}}, 5, false)
+	r1, _ := engine.CreateChatRoom("room1", []ParticipantConfig{{Name: "X"}, {Name: "Y"}}, 5)
+	r2, _ := engine.CreateChatRoom("room2", []ParticipantConfig{{Name: "P"}, {Name: "Q"}}, 5)
 
 	time.Sleep(50 * time.Millisecond)
 	engine.StopAll()
 	time.Sleep(300 * time.Millisecond)
 
-	if engine.GetRoom(r1.ID).Status != RoomStopped {
+	s1, _ := engine.GetRoomSnapshot(r1)
+	if s1.Status != RoomStopped {
 		t.Fatalf("expected room1 stopped")
 	}
-	if engine.GetRoom(r2.ID).Status != RoomStopped {
+	s2, _ := engine.GetRoomSnapshot(r2)
+	if s2.Status != RoomStopped {
 		t.Fatalf("expected room2 stopped")
 	}
 }
