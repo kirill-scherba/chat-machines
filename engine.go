@@ -24,10 +24,10 @@ type Agent interface {
 
 // ChatEngine manages the lifecycle of all chat rooms.
 type ChatEngine struct {
-	store     *RoomStore
-	agent     Agent
-	logger    ChatLogger
-	summary   SummarySaver
+	store      *RoomStore
+	agent      Agent
+	logger     ChatLogger
+	summary    SummarySaver
 	roundDelay time.Duration
 
 	// active rooms keyed by room id; value is the cancel function for the room goroutine.
@@ -271,9 +271,9 @@ func (e *ChatEngine) runRound(room *Room) (bool, error) {
 		if err := e.store.AddMessage(room.ID, msg); err != nil {
 			return false, err
 		}
-			if e.logger != nil {
-				_ = e.logger.LogMessage(room.ID, round, p.Name, resp, now)
-			}
+		if e.logger != nil {
+			_ = e.logger.LogMessage(room.ID, round, p.Name, resp, now)
+		}
 		if !IsOKResponse(resp) {
 			allOK = false
 		}

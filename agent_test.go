@@ -104,9 +104,9 @@ func TestAgentClientGetLastResponse(t *testing.T) {
 
 func TestSplitModel(t *testing.T) {
 	cases := []struct {
-		in                string
-		wantProvider      string
-		wantModel         string
+		in           string
+		wantProvider string
+		wantModel    string
 	}{
 		{"ollama-cloud/deepseek-v4-flash", "ollama-cloud", "deepseek-v4-flash"},
 		{"deepseek-v4-flash", "", "deepseek-v4-flash"},

@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Review fixes in progress** — addressing blocking comments from PR #2.
+**Review fixes applied** — awaiting final re-review of PR #2.
 
 ## Issue
 
@@ -10,9 +10,9 @@
 |---|---|
 | Number | #1 |
 | Title | feat: Чат Машин (chat-machines) — Multi-AI chat rooms server with MCP management |
-| Labels | `plan/draft`, `chat-machines`, `architecture`, `go`, `plan/manager_assigned`, `plan/manager_checked`, `plan/improve`, `plan/approved`, `act/in-progress` |
+| Labels | `plan/draft`, `chat-machines`, `architecture`, `go`, `plan/manager_assigned`, `plan/manager_checked`, `plan/improve`, `plan/approved`, `act/review` |
 | Branch | `feature/1-chat-machines` |
-| Board | Matrica — In progress |
+| Board | Matrica — In review |
 
 ## Implementation Status
 
@@ -60,11 +60,11 @@
 
 ## Next Steps
 
-1. Update Pull Request #2 with review fixes.
-2. Move Matrica issue to In review.
-3. Add `act/review` label.
-4. Wait for His Majesty's re-review.
+1. Address any remaining review comments on PR #2.
+2. Wait for His Majesty's final approval.
+3. Merge PR #2 and close issue #1.
+4. Move Matrica issue to Done.
 
 ## Last Updated
 
-2026-07-07 — Review fixes applied by Master
+2026-07-07 — Final review fixes (gofmt, docs, instructions) applied by Master

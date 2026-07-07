@@ -28,7 +28,7 @@ Available tools:
 Rules:
 - Each participant must have a unique name.
 - Use max_rounds to prevent infinite chats.
-- When a chat finishes, summaries are saved to memory-store-mcp automatically if a logger is configured.
+- When a chat finishes, summaries are saved to memory-store-mcp automatically if a summary saver is configured.
 - You may participate in a chat as an adjunct: user messages go into the room, and you relay room messages back to the user.
 `
 
@@ -60,18 +60,18 @@ func resultError(err error) (*mcp.CallToolResult, error) {
 }
 
 func chatCreateTool(engine *ChatEngine) server.ServerTool {
-		t := mcp.NewTool("chat_create",
-			mcp.WithDescription("Create and start a multi-AI chat room."),
-			mcp.WithArray("participants",
-				mcp.Description("List of participant objects with name, optional agent, and optional model"),
-				mcp.Required()),
-			mcp.WithString("topic",
-				mcp.Description("Topic of the chat"),
-				mcp.Required()),
-			mcp.WithNumber("max_rounds",
-				mcp.Description("Maximum number of rounds (default: 10)"),
-				mcp.DefaultNumber(10)),
-		)
+	t := mcp.NewTool("chat_create",
+		mcp.WithDescription("Create and start a multi-AI chat room."),
+		mcp.WithArray("participants",
+			mcp.Description("List of participant objects with name, optional agent, and optional model"),
+			mcp.Required()),
+		mcp.WithString("topic",
+			mcp.Description("Topic of the chat"),
+			mcp.Required()),
+		mcp.WithNumber("max_rounds",
+			mcp.Description("Maximum number of rounds (default: 10)"),
+			mcp.DefaultNumber(10)),
+	)
 	return server.ServerTool{
 		Tool: t,
 		Handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -258,15 +258,15 @@ func roomDetail(r RoomSnapshot) map[string]any {
 		stoppedAt = r.StoppedAt.Format(time.RFC3339)
 	}
 	return map[string]any{
-		"id":           r.ID,
-		"topic":        r.Topic,
-		"participants": names,
-		"max_rounds":   r.MaxRounds,
+		"id":            r.ID,
+		"topic":         r.Topic,
+		"participants":  names,
+		"max_rounds":    r.MaxRounds,
 		"current_round": r.CurrentRound,
-		"status":       r.Status,
-		"created_at":   r.CreatedAt.Format(time.RFC3339),
-		"stopped_at":   stoppedAt,
-		"messages":     r.Messages,
+		"status":        r.Status,
+		"created_at":    r.CreatedAt.Format(time.RFC3339),
+		"stopped_at":    stoppedAt,
+		"messages":      r.Messages,
 	}
 }
 

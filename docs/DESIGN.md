@@ -79,6 +79,12 @@ MCP handlers and tests never read mutable `*Room` fields directly. `RoomStore` e
 
 **Rationale:** The room goroutine writes to `Messages`, `CurrentRound`, and `Status` while MCP handlers read them. Snapshots eliminate this entire class of races without scattering locks in handler code.
 
+### 2b. Global SQLite Logging
+
+Message logging to SQLite is enabled globally by the `--db` flag at server startup. There is no per-room `save_log` toggle: a single server either logs all rooms or none.
+
+**Rationale:** Avoids unused MCP parameters, keeps `chat_create` focused on chat configuration, and matches the current implementation where `ChatEngine` owns an optional `logger`.
+
 ### 3. Goroutine per Room
 
 Each active room runs in its own goroutine via `ChatEngine.run()`. The engine manages a `map[string]context.CancelFunc` for stopping individual rooms.
@@ -159,12 +165,6 @@ main goroutine
   │
   └── Room goroutine N ...
 ```
-
-### 2b. Global SQLite Logging
-
-Message logging to SQLite is enabled globally by the `--db` flag at server startup. There is no per-room `save_log` toggle: a single server either logs all rooms or none.
-
-**Rationale:** Avoids unused MCP parameters, keeps `chat_create` focused on chat configuration, and matches the current implementation where `ChatEngine` owns an optional `logger`.
 
 ## Configuration
 
