@@ -1,0 +1,435 @@
+// Copyright 2026 Kirill Scherba. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Chat engine: round-robin loop orchestrator.
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"sync"
+	"time"
+)
+
+const consecutiveOKStop = 2
+
+// Agent is the interface for creating sessions and sending/receiving messages.
+// It abstracts the opencode-serve HTTP client so tests can use mocks.
+type Agent interface {
+	CreateSession(name, agent, model, workDir string) (string, error)
+	SendMessage(sessionID, text, agent, model string) (string, error)
+	SendMessageAsync(sessionID, text, agent, model string) error
+}
+
+// ChatEngine manages the lifecycle of all chat rooms.
+type ChatEngine struct {
+	store     *RoomStore
+	agent     Agent
+	logger    ChatLogger
+	summary   SummarySaver
+	roundDelay time.Duration
+
+	// active rooms keyed by room id; value is the cancel function for the room goroutine.
+	active map[string]context.CancelFunc
+	mu     sync.RWMutex
+}
+
+// NewChatEngine creates a new chat engine.
+func NewChatEngine(agent Agent) *ChatEngine {
+	return &ChatEngine{
+		store:      NewRoomStore(),
+		agent:      agent,
+		active:     make(map[string]context.CancelFunc),
+		roundDelay: 500 * time.Millisecond,
+	}
+}
+
+// SetRoundDelay configures the pause between rounds. Useful in tests.
+func (e *ChatEngine) SetRoundDelay(d time.Duration) {
+	e.roundDelay = d
+}
+
+// SetLogger sets an optional message logger.
+func (e *ChatEngine) SetLogger(l ChatLogger) {
+	e.logger = l
+}
+
+// SetSummarySaver sets the summary saver used when a room stops.
+func (e *ChatEngine) SetSummarySaver(s SummarySaver) {
+	e.summary = s
+}
+
+// CreateChatRoom creates and starts a chat room asynchronously.
+func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, maxRounds int, saveLog bool) (*Room, error) {
+	room := e.store.CreateRoom(topic, maxRounds)
+	for _, cfg := range configs {
+		p := Participant{
+			Name:  cfg.Name,
+			Agent: cfg.Agent,
+			Model: cfg.Model,
+		}
+		if p.Name == "" {
+			p.Name = fmt.Sprintf("agent-%d", len(room.Participants)+1)
+		}
+		if err := e.store.AddParticipant(room.ID, p); err != nil {
+			return nil, err
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	e.mu.Lock()
+	e.active[room.ID] = cancel
+	e.mu.Unlock()
+
+	go e.run(ctx, room, saveLog)
+	return room, nil
+}
+
+// GetRoom returns a room by id.
+func (e *ChatEngine) GetRoom(id string) *Room {
+	return e.store.GetRoom(id)
+}
+
+// ListRooms returns all rooms.
+func (e *ChatEngine) ListRooms() []*Room {
+	return e.store.ListRooms()
+}
+
+// StopRoom stops a room gracefully.
+func (e *ChatEngine) StopRoom(id string) error {
+	e.mu.Lock()
+	cancel, ok := e.active[id]
+	if ok {
+		delete(e.active, id)
+	}
+	e.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("room %s is not active", id)
+	}
+	cancel()
+	return nil
+}
+
+// StopAll stops all active rooms.
+func (e *ChatEngine) StopAll() {
+	e.mu.Lock()
+	items := make([]context.CancelFunc, 0, len(e.active))
+	for _, cancel := range e.active {
+		items = append(items, cancel)
+	}
+	e.active = make(map[string]context.CancelFunc)
+	e.mu.Unlock()
+	for _, cancel := range items {
+		cancel()
+	}
+	// Give goroutines a moment to finish summary collection.
+	time.Sleep(500 * time.Millisecond)
+}
+
+// run is the per-room goroutine.
+func (e *ChatEngine) run(ctx context.Context, room *Room, saveLog bool) {
+	log.Printf("room %s: starting with %d participant(s)", room.ID, room.ParticipantCount())
+
+	if err := e.startRoom(room); err != nil {
+		log.Printf("room %s: start failed: %v", room.ID, err)
+		e.finishRoom(room, err)
+		return
+	}
+
+	if err := e.store.SetStatus(room.ID, RoomActive); err != nil {
+		log.Printf("room %s: set active failed: %v", room.ID, err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			e.finishRoom(room, ctx.Err())
+			return
+		default:
+		}
+
+		if room.CurrentRound >= room.MaxRounds {
+			log.Printf("room %s: reached max rounds", room.ID)
+			e.finishRoom(room, nil)
+			return
+		}
+
+		done, err := e.runRound(room)
+		if err != nil {
+			log.Printf("room %s: round error: %v", room.ID, err)
+			e.finishRoom(room, err)
+			return
+		}
+		if done {
+			log.Printf("room %s: all participants OK, stopping", room.ID)
+			e.finishRoom(room, nil)
+			return
+		}
+	}
+}
+
+// startRoom creates opencode sessions and sends onboarding messages.
+func (e *ChatEngine) startRoom(room *Room) error {
+	room.mu.Lock()
+	defer room.mu.Unlock()
+
+	workDir := "/tmp"
+	for i := range room.Participants {
+		p := &room.Participants[i]
+		sid, err := e.agent.CreateSession(p.Name, p.Agent, p.Model, workDir)
+		if err != nil {
+			return fmt.Errorf("create session for %s: %w", p.Name, err)
+		}
+		p.SessionID = sid
+	}
+
+	onboarding := buildOnboarding(room.Topic, room.Participants)
+	for i := range room.Participants {
+		p := &room.Participants[i]
+		if _, err := e.agent.SendMessage(p.SessionID, onboarding, p.Agent, p.Model); err != nil {
+			return fmt.Errorf("onboarding %s: %w", p.Name, err)
+		}
+	}
+	return nil
+}
+
+// runRound executes a single round. Returns true if the chat should stop due to all-OK.
+func (e *ChatEngine) runRound(room *Room) (bool, error) {
+	room.mu.Lock()
+	room.CurrentRound++
+	round := room.CurrentRound
+	participants := make([]Participant, len(room.Participants))
+	copy(participants, room.Participants)
+	room.mu.Unlock()
+
+	log.Printf("room %s: round %d/%d", room.ID, round, room.MaxRounds)
+
+	// Build transcript from previous round messages (empty on round 1).
+	transcript := buildTranscript(room, round, participants)
+
+	responses := make([]string, len(participants))
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var roundErr error
+
+	for i, p := range participants {
+		wg.Add(1)
+		go func(idx int, part Participant) {
+			defer wg.Done()
+			text := transcript
+			if round == 1 {
+				// In round 1 we already sent onboarding; just ask for the first contribution.
+				text = fmt.Sprintf("%s\n\nYour turn, %s. Write your first message.", buildHeader(room.Topic, participants), part.Name)
+			} else {
+				text = fmt.Sprintf("%s\n\nYour turn, %s. Write your response (or \"OK\" if nothing to say).", transcript, part.Name)
+			}
+			resp, err := e.agent.SendMessage(part.SessionID, text, part.Agent, part.Model)
+			if err != nil {
+				errOnce.Do(func() { roundErr = fmt.Errorf("%s: %w", part.Name, err) })
+				resp = fmt.Sprintf("(timeout: %s)", err)
+			}
+			responses[idx] = resp
+		}(i, p)
+	}
+
+	wg.Wait()
+	if roundErr != nil {
+		// Save timeout markers but continue.
+		log.Printf("room %s: round %d had participant error(s): %v", room.ID, round, roundErr)
+	}
+
+	allOK := true
+	now := time.Now()
+	for i, p := range participants {
+		resp := strings.TrimSpace(responses[i])
+		msg := Message{
+			Round:     round,
+			From:      p.Name,
+			Text:      resp,
+			Timestamp: now,
+		}
+		if err := e.store.AddMessage(room.ID, msg); err != nil {
+			return false, err
+		}
+		if e.logger != nil {
+			_ = e.logger.LogMessage(room.ID, round, p.Name, resp, now)
+		}
+		if !IsOKResponse(resp) {
+			allOK = false
+		}
+	}
+
+	room.mu.Lock()
+	if allOK {
+		room.okRounds++
+	} else {
+		room.okRounds = 0
+	}
+	stop := room.okRounds >= consecutiveOKStop
+	room.mu.Unlock()
+
+	if !stop {
+		time.Sleep(e.roundDelay)
+	}
+
+	return stop, nil
+}
+
+// finishRoom stops the room and collects summary.
+func (e *ChatEngine) finishRoom(room *Room, cause error) {
+	_ = e.store.SetStatus(room.ID, RoomStopped)
+
+	e.mu.Lock()
+	delete(e.active, room.ID)
+	e.mu.Unlock()
+
+	if cause != nil && cause != context.Canceled {
+		log.Printf("room %s: finished with error: %v", room.ID, cause)
+	} else {
+		log.Printf("room %s: finished after %d round(s)", room.ID, room.CurrentRound)
+	}
+
+	// Collect summaries.
+	if e.summary != nil {
+		summaries, err := e.collectSummaries(room)
+		if err != nil {
+			log.Printf("room %s: summary collection error: %v", room.ID, err)
+		} else {
+			digest := buildDigest(room, summaries)
+			if err := e.summary.Save(room.ID, digest); err != nil {
+				log.Printf("room %s: summary save error: %v", room.ID, err)
+			} else {
+				log.Printf("room %s: summary saved", room.ID)
+			}
+		}
+	}
+
+	// Close opencode sessions.
+	e.closeSessions(room)
+}
+
+// buildDigest assembles the unified summary digest.
+func buildDigest(room *Room, summaries []Summary) Digest {
+	d := Digest{
+		RoomID:       room.ID,
+		Topic:        room.Topic,
+		Participants: make([]string, 0, len(room.Participants)),
+		Rounds:       room.CurrentRound,
+		CreatedAt:    room.CreatedAt,
+		Summaries:    summaries,
+	}
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	for _, p := range room.Participants {
+		d.Participants = append(d.Participants, p.Name)
+	}
+	if room.StoppedAt != nil {
+		d.StoppedAt = *room.StoppedAt
+	}
+	return d
+}
+
+// closeSessions closes all opencode sessions for a room.
+func (e *ChatEngine) closeSessions(room *Room) {
+	room.mu.RLock()
+	participants := make([]Participant, len(room.Participants))
+	copy(participants, room.Participants)
+	room.mu.RUnlock()
+	for _, p := range participants {
+		if p.SessionID == "" {
+			continue
+		}
+		// There is no explicit close endpoint; sessions expire automatically.
+		// We send a polite final message so the agent knows the chat ended.
+		_ = e.agent.SendMessageAsync(p.SessionID, "The chat has ended. Thank you.", p.Agent, p.Model)
+	}
+}
+
+// collectSummaries asks each participant for a summary.
+func (e *ChatEngine) collectSummaries(room *Room) ([]Summary, error) {
+	room.mu.RLock()
+	participants := make([]Participant, len(room.Participants))
+	copy(participants, room.Participants)
+	room.mu.RUnlock()
+
+	prompt := `The chat is finished. Please write a short summary:
+- What did you learn?
+- What ideas/insights emerged?
+- What questions remain open?`
+
+	var summaries []Summary
+	for _, p := range participants {
+		if p.SessionID == "" {
+			continue
+		}
+		text, err := e.agent.SendMessage(p.SessionID, prompt, p.Agent, p.Model)
+		if err != nil {
+			text = fmt.Sprintf("(summary error: %s)", err)
+		}
+		summaries = append(summaries, Summary{From: p.Name, Text: text})
+	}
+	return summaries, nil
+}
+
+// buildOnboarding creates the initial system-style message for each participant.
+func buildOnboarding(topic string, participants []Participant) string {
+	names := make([]string, len(participants))
+	for i, p := range participants {
+		names[i] = p.Name
+	}
+	n := len(participants)
+	var rules string
+	if n == 2 {
+		rules = "There are 2 participants. Respond to every message."
+	} else {
+		rules = fmt.Sprintf("There are %d participants. Respond if you have something to say, otherwise reply with exactly \"OK\" to skip your turn.", n)
+	}
+	return fmt.Sprintf("You are in a chat. Topic: %q.\nParticipants: %s.\n\n%s\n\nImportant rules:\n- If you discover an interesting fact, insight, or useful knowledge during the conversation, save it to memory via memory_save immediately.\n- At the end of the chat, you will be asked for a summary.", topic, strings.Join(names, ", "), rules)
+}
+
+// buildHeader returns the participant header for a round prompt.
+func buildHeader(topic string, participants []Participant) string {
+	names := make([]string, len(participants))
+	for i, p := range participants {
+		names[i] = p.Name
+	}
+	return fmt.Sprintf("You are in a chat. Topic: %q.\nParticipants: %s (total: %d).", topic, strings.Join(names, ", "), len(participants))
+}
+
+// buildTranscript builds the previous-round transcript for distribution.
+func buildTranscript(room *Room, round int, participants []Participant) string {
+	var sb strings.Builder
+	sb.WriteString(buildHeader(room.Topic, participants))
+	sb.WriteString(fmt.Sprintf("\n\n[Round %d/%d]\n", round, room.MaxRounds))
+	messages := room.MessagesForRound(round - 1)
+	if len(messages) == 0 {
+		sb.WriteString("(no previous messages)\n")
+	} else {
+		sb.WriteString("Messages from participants:\n")
+		for _, m := range messages {
+			sb.WriteString(fmt.Sprintf("[%s] %s\n", m.From, m.Text))
+		}
+	}
+	return sb.String()
+}
+
+// ParticipantConfig is the user-provided configuration for a participant.
+type ParticipantConfig struct {
+	Name  string `json:"name"`
+	Agent string `json:"agent,omitempty"`
+	Model string `json:"model,omitempty"`
+}
+
+// Summary is a single participant's summary.
+type Summary struct {
+	From string `json:"from"`
+	Text string `json:"text"`
+}
+
+// SummarySaver persists the final chat digest.
+type SummarySaver interface {
+	Save(roomID string, digest Digest) error
+}
