@@ -24,11 +24,12 @@ type Agent interface {
 
 // ChatEngine manages the lifecycle of all chat rooms.
 type ChatEngine struct {
-	store      *RoomStore
-	agent      Agent
-	logger     ChatLogger
-	summary    SummarySaver
-	roundDelay time.Duration
+	store           *RoomStore
+	agent           Agent
+	logger          ChatLogger
+	summary         SummarySaver
+	summaryAutoSave bool
+	roundDelay      time.Duration
 
 	// active rooms keyed by room id; value is the cancel function for the room goroutine.
 	active map[string]context.CancelFunc
@@ -58,6 +59,13 @@ func (e *ChatEngine) SetLogger(l ChatLogger) {
 // SetSummarySaver sets the summary saver used when a room stops.
 func (e *ChatEngine) SetSummarySaver(s SummarySaver) {
 	e.summary = s
+}
+
+// SetSummaryAutoSave controls whether the engine saves the digest to
+// memory-store-mcp automatically on room stop. Default is false: the digest
+// is returned in the chat_stop response for the caller to save.
+func (e *ChatEngine) SetSummaryAutoSave(auto bool) {
+	e.summaryAutoSave = auto
 }
 
 // CreateChatRoom creates and starts a chat room asynchronously.
@@ -95,6 +103,22 @@ func (e *ChatEngine) GetRoom(id string) *Room {
 // GetRoomSnapshot returns a safe snapshot of a room.
 func (e *ChatEngine) GetRoomSnapshot(id string) (RoomSnapshot, bool) {
 	return e.store.GetSnapshot(id)
+}
+
+// AddExternalMessage injects a message from an external source (e.g. human) into
+// the room transcript without assigning a turn in the round-robin loop.
+func (e *ChatEngine) AddExternalMessage(roomID, from, text string) error {
+	return e.store.AddExternalMessage(roomID, from, text)
+}
+
+// SetAdjunct registers a human adjunct for the room.
+func (e *ChatEngine) SetAdjunct(roomID, sessionID, name string) error {
+	return e.store.SetAdjunct(roomID, sessionID, name)
+}
+
+// ClearAdjunct removes a human adjunct from the room.
+func (e *ChatEngine) ClearAdjunct(roomID string) error {
+	return e.store.ClearAdjunct(roomID)
 }
 
 // ListRooms returns all rooms.
@@ -301,17 +325,23 @@ func (e *ChatEngine) finishRoom(room *Room, cause error) {
 		log.Printf("room %s: finished after %d round(s)", room.ID, room.CurrentRound)
 	}
 
-	// Collect summaries.
+	// Collect summaries and store digest on the room. The digest is returned
+	// by chat_stop / chat_get. Auto-save is opt-in via SetSummaryAutoSave.
 	if e.summary != nil {
 		summaries, err := e.collectSummaries(room)
 		if err != nil {
 			log.Printf("room %s: summary collection error: %v", room.ID, err)
 		} else {
 			digest := buildDigest(room, summaries)
-			if err := e.summary.Save(room.ID, digest); err != nil {
-				log.Printf("room %s: summary save error: %v", room.ID, err)
-			} else {
-				log.Printf("room %s: summary saved", room.ID)
+			if err := e.store.SetDigest(room.ID, &digest); err != nil {
+				log.Printf("room %s: store digest error: %v", room.ID, err)
+			}
+			if e.summaryAutoSave {
+				if err := e.summary.Save(room.ID, digest); err != nil {
+					log.Printf("room %s: summary save error: %v", room.ID, err)
+				} else {
+					log.Printf("room %s: summary saved", room.ID)
+				}
 			}
 		}
 	}

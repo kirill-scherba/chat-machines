@@ -31,6 +31,7 @@ func main() {
 	httpAddr := flag.String("http", "", "MCP HTTP transport address (e.g. :8080); empty uses stdio")
 	dbPath := flag.String("db", "", "SQLite database path for optional message logging")
 	memoryMCP := flag.String("memory-mcp", "http://127.0.0.1:7708/mcp", "memory-store-mcp URL for saving summaries")
+	autoSave := flag.Bool("auto-save", false, "automatically save digest to memory-store-mcp on chat stop")
 	messageTimeout := flag.Duration("timeout", 120*time.Second, "per-message timeout")
 	logDir := flag.String("log-dir", "", "log output directory (default: stderr only)")
 
@@ -61,6 +62,7 @@ func main() {
 	// Summary saver
 	summary := NewMemorySummary(*memoryMCP)
 	engine.SetSummarySaver(summary)
+	engine.SetSummaryAutoSave(*autoSave)
 
 	// Create MCP server
 	mcpServer := NewMCPServer(engine)
