@@ -15,24 +15,30 @@ chat-machines is a Go application that manages multi-AI chat rooms. Each AI part
 │  │ Server   │──▶│ Store    │──▶│ Engine   │──▶│ Client  │  │
 │  │          │◀──│          │◀──│          │◀──│         │  │
 │  └──────────┘   └──────────┘   └──────────┘   └────┬────┘  │
-│                                                     │      │
-└─────────────────────────────────────────────────────┼──────┘
-                                                      │
-                                              HTTP POST/GET
-                                                      │
-┌─────────────────────────────────────────────────────┼──────┐
-│                   opencode-serve                     │      │
-│                                              :7709  │      │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐        │      │
-│  │ Session  │   │ Session  │   │ Session  │   ...   │      │
-│  │ Baron    │   │ Manager  │   │ Agent N  │         │      │
-│  └──────────┘   └──────────┘   └──────────┘         │      │
-└──────────────────────────────────────────────────────┘      │
-                                                               │
-┌──────────────────────────────────────────────────────────────┘
+│       ▲                                           │      │
+│       │ chat_send, chat_join, chat_leave          │      │
+└───────┼───────────────────────────────────────────┼──────┘
+        │                                             │
+        │ Human adjunct (Kirill/Baron session)        │ HTTP POST/GET
+        │                                             │
+┌───────┴─────────────────────────────────────────┐   │
+│                   opencode-serve                 │   │
+│                                          :7709   │   │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐    │   │
+│  │ Session  │   │ Session  │   │ Session  │ ...  │   │
+│  │ Baron    │   │ Manager  │   │ Agent N  │      │   │
+│  └──────────┘   └──────────┘   └──────────┘      │   │
+│  ┌──────────┐                                    │   │
+│  │ Session  │ ◀── human adjunct                   │   │
+│  │ Kirill   │                                    │   │
+│  └──────────┘                                    │   │
+└──────────────────────────────────────────────────┘   │
+                                                       │
+┌──────────────────────────────────────────────────────┘
 │                    memory-store-mcp (:7708)
 │  ┌──────────────────────────────────────────┐
 │  │ memory/project/chat-machines/digest/{id}  │
+│  │  (caller saves digest returned by chat_stop) │
 │  └──────────────────────────────────────────┘
 └──────────────────────────────────────────────┘
 ```
@@ -41,16 +47,16 @@ chat-machines is a Go application that manages multi-AI chat rooms. Each AI part
 
 ```
 chat-machines/
-├── main.go              # Entrypoint: flags, MCP server startup, engine init
+├── main.go              # Entrypoint: flags (including --auto-save), MCP server startup, engine init
 ├── server.go            # MCP server setup, tool registration, system instructions
 ├── agent.go             # OpenCodeServeClient: HTTP client for opencode-serve
-├── room.go              # Room, Participant, Message, RoomStore, RoomSnapshot
-├── engine.go            # ChatEngine: round-robin loop, goroutine per room
-├── summary.go           # Post-chat summary collection → memory-store-mcp
+├── room.go              # Room, Participant, Message, RoomStore, RoomSnapshot, adjunct state
+├── engine.go            # ChatEngine: round-robin loop, goroutine per room, digest storage
+├── summary.go           # Digest builder and optional memory-store-mcp saver
 ├── store.go             # Optional SQLite persistence (enabled by --db flag)
 ├── agent_test.go        # Tests for agent client
 ├── room_test.go         # Tests for room store
-├── engine_test.go       # Tests for chat engine
+├── engine_test.go       # Tests for chat engine and OK protocol
 ├── go.mod / go.sum
 ├── README.md
 └── docs/
@@ -112,21 +118,29 @@ When >2 participants:
 
 ### 6. Summary Collection at Chat End
 
-After chat stops (max_rounds, chat_stop, or auto-stop):
-1. Each participant is asked to write a summary
-2. All summaries are collected
-3. A unified digest is saved to memory-store-mcp
+When a room stops (via `chat_stop`, max rounds, or auto-stop), the engine waits synchronously for cleanup:
 
-**Rationale:** The value of chat is the knowledge generated, not the chat itself.
+1. The room goroutine finishes any in-progress round.
+2. Each participant is asked to write a summary.
+3. All summaries are collected and a unified digest is stored on the room (`Room.StoredDigest`).
+4. The room goroutine signals completion.
+5. `chat_stop` returns only after the digest is stored, so its response always contains the digest.
+6. `chat_get` includes the digest for stopped rooms.
+7. If `--auto-save` is true and a `SummarySaver` is configured, the digest is also saved to memory-store-mcp.
+
+**Rationale:** Returning the digest must be deterministic for the caller. The engine therefore waits for summary collection before `chat_stop` returns, and auto-save is an opt-in side effect controlled by the operator.
 
 ### 7. Human-in-Chat via Adjunct
 
 Humans participate through their existing opencode session:
-- Baron acts as a bridge (adjunct mode)
-- Human messages flow: user → Baron → chat_create/chat_send → room
-- Room messages flow: room → chat_get → Baron → user
+- `chat_join(room_id)` registers the human session as an adjunct on the room
+- `chat_send(room_id, message)` injects a human message into the room transcript
+- `chat_get(room_id)` is polled by Baron to relay new room messages back to the user
+- `chat_leave(room_id)` removes the adjunct
 
-**Rationale:** No special "human session" needed.
+The adjunct is stored as room metadata (`AdjunctSessionID`, `AdjunctName`), not as a round-robin participant. This lets the human speak at any time without breaking the AI turn order.
+
+**Rationale:** No special "human session" needed; the human is an observer who can interject.
 
 ### 8. Agent Interface for Testability
 
@@ -174,9 +188,23 @@ chat-machines \
   --http :8080 \                           # MCP HTTP transport (optional)
   --db /tmp/chat-machines.db \             # SQLite log (optional)
   --memory-mcp http://127.0.0.1:7708/mcp \ # memory-store-mcp address
+  --auto-save \                            # auto-save digest to memory-store-mcp (default: false)
   --timeout 120s \                          # per-message timeout
   --log-dir /var/log/chat-machines          # file logging (optional)
 ```
+
+## MCP Tool Reference
+
+| Tool | Purpose |
+|---|---|
+| `chat_create` | Create and start a multi-AI chat room |
+| `chat_list` | List active rooms |
+| `chat_get` | Get room state (includes `digest` for stopped rooms) |
+| `chat_send` | Inject a message from a human into the room |
+| `chat_join` | Join a room as a human adjunct |
+| `chat_leave` | Leave a room as a human adjunct |
+| `chat_stop` | Stop a room and return the summary digest |
+| `chat_stats` | Global chat statistics |
 
 ## Future Extensions (not in v1)
 

@@ -56,21 +56,34 @@ type Room struct {
 	// okRounds tracks how many consecutive full-OK rounds happened.
 	okRounds int
 
+	// AdjunctSessionID is the opencode-serve session ID of the human adjunct,
+	// if any. Empty means no human is currently joined.
+	AdjunctSessionID string
+	AdjunctName      string
+
+	// StoredDigest is the post-chat summary digest computed when the room
+	// stops. It is returned by chat_stop and chat_get instead of being saved
+	// directly to memory-store-mcp.
+	StoredDigest *Digest
+
 	mu sync.RWMutex
 }
 
 // RoomSnapshot is an immutable copy of a Room for safe concurrent reads.
 type RoomSnapshot struct {
-	ID           string        `json:"id"`
-	Topic        string        `json:"topic"`
-	Participants []Participant `json:"participants"`
-	MaxRounds    int           `json:"max_rounds"`
-	CurrentRound int           `json:"current_round"`
-	Status       RoomStatus    `json:"status"`
-	Messages     []Message     `json:"messages"`
-	CreatedAt    time.Time     `json:"created_at"`
-	StoppedAt    *time.Time    `json:"stopped_at,omitempty"`
-	OKRounds     int           `json:"ok_rounds"`
+	ID               string        `json:"id"`
+	Topic            string        `json:"topic"`
+	Participants     []Participant `json:"participants"`
+	MaxRounds        int           `json:"max_rounds"`
+	CurrentRound     int           `json:"current_round"`
+	Status           RoomStatus    `json:"status"`
+	Messages         []Message     `json:"messages"`
+	CreatedAt        time.Time     `json:"created_at"`
+	StoppedAt        *time.Time    `json:"stopped_at,omitempty"`
+	OKRounds         int           `json:"ok_rounds"`
+	AdjunctSessionID string        `json:"adjunct_session_id,omitempty"`
+	AdjunctName      string        `json:"adjunct_name,omitempty"`
+	StoredDigest     *Digest       `json:"digest,omitempty"`
 }
 
 // Snapshot returns a deep-ish copy of the room under read lock.
@@ -88,16 +101,19 @@ func (r *Room) Snapshot() RoomSnapshot {
 		stopped = &t
 	}
 	return RoomSnapshot{
-		ID:           r.ID,
-		Topic:        r.Topic,
-		Participants: p,
-		MaxRounds:    r.MaxRounds,
-		CurrentRound: r.CurrentRound,
-		Status:       r.Status,
-		Messages:     m,
-		CreatedAt:    r.CreatedAt,
-		StoppedAt:    stopped,
-		OKRounds:     r.okRounds,
+		ID:               r.ID,
+		Topic:            r.Topic,
+		Participants:     p,
+		MaxRounds:        r.MaxRounds,
+		CurrentRound:     r.CurrentRound,
+		Status:           r.Status,
+		Messages:         m,
+		CreatedAt:        r.CreatedAt,
+		StoppedAt:        stopped,
+		OKRounds:         r.okRounds,
+		AdjunctSessionID: r.AdjunctSessionID,
+		AdjunctName:      r.AdjunctName,
+		StoredDigest:     r.StoredDigest,
 	}
 }
 
@@ -217,6 +233,69 @@ func (s *RoomStore) AddMessage(roomID string, m Message) error {
 		return fmt.Errorf("room %s is stopped", roomID)
 	}
 	r.Messages = append(r.Messages, m)
+	return nil
+}
+
+// AddExternalMessage injects a message from a human (adjunct) into the room
+// without incrementing the round. The message becomes part of the transcript
+// for the next round.
+func (s *RoomStore) AddExternalMessage(roomID, from, text string) error {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return fmt.Errorf("room %s not found", roomID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.Status == RoomStopped {
+		return fmt.Errorf("room %s is stopped", roomID)
+	}
+	r.Messages = append(r.Messages, Message{
+		Round:     r.CurrentRound,
+		From:      from,
+		Text:      text,
+		Timestamp: time.Now(),
+	})
+	return nil
+}
+
+// SetAdjunct registers an external human observer for the room.
+func (s *RoomStore) SetAdjunct(roomID, sessionID, name string) error {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return fmt.Errorf("room %s not found", roomID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.Status == RoomStopped {
+		return fmt.Errorf("room %s is stopped", roomID)
+	}
+	r.AdjunctSessionID = sessionID
+	r.AdjunctName = name
+	return nil
+}
+
+// ClearAdjunct removes the human adjunct from the room.
+func (s *RoomStore) ClearAdjunct(roomID string) error {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return fmt.Errorf("room %s not found", roomID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.AdjunctSessionID = ""
+	r.AdjunctName = ""
+	return nil
+}
+
+// SetDigest stores the post-chat summary digest on the room.
+func (s *RoomStore) SetDigest(roomID string, digest *Digest) error {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return fmt.Errorf("room %s not found", roomID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.StoredDigest = digest
 	return nil
 }
 

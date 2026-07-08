@@ -24,24 +24,28 @@ type Agent interface {
 
 // ChatEngine manages the lifecycle of all chat rooms.
 type ChatEngine struct {
-	store      *RoomStore
-	agent      Agent
-	logger     ChatLogger
-	summary    SummarySaver
-	roundDelay time.Duration
+	store           *RoomStore
+	agent           Agent
+	logger          ChatLogger
+	summary         SummarySaver
+	summaryAutoSave bool
+	roundDelay      time.Duration
 
 	// active rooms keyed by room id; value is the cancel function for the room goroutine.
 	active map[string]context.CancelFunc
-	mu     sync.RWMutex
+	// completions keyed by room id; closed when the room goroutine finishes cleanup.
+	completions map[string]chan struct{}
+	mu          sync.RWMutex
 }
 
 // NewChatEngine creates a new chat engine.
 func NewChatEngine(agent Agent) *ChatEngine {
 	return &ChatEngine{
-		store:      NewRoomStore(),
-		agent:      agent,
-		active:     make(map[string]context.CancelFunc),
-		roundDelay: 500 * time.Millisecond,
+		store:       NewRoomStore(),
+		agent:       agent,
+		active:      make(map[string]context.CancelFunc),
+		completions: make(map[string]chan struct{}),
+		roundDelay:  500 * time.Millisecond,
 	}
 }
 
@@ -58,6 +62,13 @@ func (e *ChatEngine) SetLogger(l ChatLogger) {
 // SetSummarySaver sets the summary saver used when a room stops.
 func (e *ChatEngine) SetSummarySaver(s SummarySaver) {
 	e.summary = s
+}
+
+// SetSummaryAutoSave controls whether the engine saves the digest to
+// memory-store-mcp automatically on room stop. Default is false: the digest
+// is returned in the chat_stop response for the caller to save.
+func (e *ChatEngine) SetSummaryAutoSave(auto bool) {
+	e.summaryAutoSave = auto
 }
 
 // CreateChatRoom creates and starts a chat room asynchronously.
@@ -78,11 +89,13 @@ func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, m
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	e.mu.Lock()
 	e.active[room.ID] = cancel
+	e.completions[room.ID] = done
 	e.mu.Unlock()
 
-	go e.run(ctx, room)
+	go e.run(ctx, room, done)
 	return room.ID, nil
 }
 
@@ -97,6 +110,22 @@ func (e *ChatEngine) GetRoomSnapshot(id string) (RoomSnapshot, bool) {
 	return e.store.GetSnapshot(id)
 }
 
+// AddExternalMessage injects a message from an external source (e.g. human) into
+// the room transcript without assigning a turn in the round-robin loop.
+func (e *ChatEngine) AddExternalMessage(roomID, from, text string) error {
+	return e.store.AddExternalMessage(roomID, from, text)
+}
+
+// SetAdjunct registers a human adjunct for the room.
+func (e *ChatEngine) SetAdjunct(roomID, sessionID, name string) error {
+	return e.store.SetAdjunct(roomID, sessionID, name)
+}
+
+// ClearAdjunct removes a human adjunct from the room.
+func (e *ChatEngine) ClearAdjunct(roomID string) error {
+	return e.store.ClearAdjunct(roomID)
+}
+
 // ListRooms returns all rooms.
 func (e *ChatEngine) ListRooms() []*Room {
 	return e.store.ListRooms()
@@ -107,12 +136,16 @@ func (e *ChatEngine) ListRoomSnapshots() []RoomSnapshot {
 	return e.store.ListSnapshots()
 }
 
-// StopRoom stops a room gracefully.
+// StopRoom stops a room gracefully and waits for the room goroutine to finish
+// cleanup, including digest collection.
 func (e *ChatEngine) StopRoom(id string) error {
 	e.mu.Lock()
 	cancel, ok := e.active[id]
+	var done chan struct{}
 	if ok {
 		delete(e.active, id)
+		done = e.completions[id]
+		delete(e.completions, id)
 	}
 	e.mu.Unlock()
 	if !ok {
@@ -121,6 +154,9 @@ func (e *ChatEngine) StopRoom(id string) error {
 	// Mark the room as stopping synchronously so MCP handlers observe a deterministic state.
 	_ = e.store.SetStatus(id, RoomStopped)
 	cancel()
+	if done != nil {
+		<-done
+	}
 	return nil
 }
 
@@ -128,20 +164,28 @@ func (e *ChatEngine) StopRoom(id string) error {
 func (e *ChatEngine) StopAll() {
 	e.mu.Lock()
 	items := make([]context.CancelFunc, 0, len(e.active))
+	dones := make([]chan struct{}, 0, len(e.completions))
 	for _, cancel := range e.active {
 		items = append(items, cancel)
 	}
+	for _, done := range e.completions {
+		dones = append(dones, done)
+	}
 	e.active = make(map[string]context.CancelFunc)
+	e.completions = make(map[string]chan struct{})
 	e.mu.Unlock()
 	for _, cancel := range items {
 		cancel()
 	}
-	// Give goroutines a moment to finish summary collection.
-	time.Sleep(500 * time.Millisecond)
+	for _, done := range dones {
+		<-done
+	}
 }
 
-// run is the per-room goroutine.
-func (e *ChatEngine) run(ctx context.Context, room *Room) {
+// run is the per-room goroutine. done is closed after finishRoom returns so
+// callers can wait for completion of cleanup (including digest collection).
+func (e *ChatEngine) run(ctx context.Context, room *Room, done chan struct{}) {
+	defer close(done)
 	log.Printf("room %s: starting with %d participant(s)", room.ID, room.ParticipantCount())
 
 	if err := e.startRoom(room); err != nil {
@@ -293,6 +337,7 @@ func (e *ChatEngine) finishRoom(room *Room, cause error) {
 
 	e.mu.Lock()
 	delete(e.active, room.ID)
+	delete(e.completions, room.ID)
 	e.mu.Unlock()
 
 	if cause != nil && cause != context.Canceled {
@@ -301,13 +346,18 @@ func (e *ChatEngine) finishRoom(room *Room, cause error) {
 		log.Printf("room %s: finished after %d round(s)", room.ID, room.CurrentRound)
 	}
 
-	// Collect summaries.
-	if e.summary != nil {
-		summaries, err := e.collectSummaries(room)
-		if err != nil {
-			log.Printf("room %s: summary collection error: %v", room.ID, err)
-		} else {
-			digest := buildDigest(room, summaries)
+	// Collect summaries and store digest on the room. The digest is returned
+	// by chat_stop / chat_get regardless of whether a SummarySaver is set.
+	// Auto-save to memory-store-mcp is opt-in via SetSummaryAutoSave.
+	summaries, err := e.collectSummaries(room)
+	if err != nil {
+		log.Printf("room %s: summary collection error: %v", room.ID, err)
+	} else {
+		digest := buildDigest(room, summaries)
+		if err := e.store.SetDigest(room.ID, &digest); err != nil {
+			log.Printf("room %s: store digest error: %v", room.ID, err)
+		}
+		if e.summaryAutoSave && e.summary != nil {
 			if err := e.summary.Save(room.ID, digest); err != nil {
 				log.Printf("room %s: summary save error: %v", room.ID, err)
 			} else {
