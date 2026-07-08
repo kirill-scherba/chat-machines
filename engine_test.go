@@ -351,6 +351,47 @@ func TestEngineStopAll(t *testing.T) {
 	}
 }
 
+// TestCompletionsCleanedUpAfterNaturalFinish verifies that the engine
+// removes the per-room completion channel when a room stops naturally (all OK
+// auto-stop). Without this cleanup, e.completions leaks closed channels for
+// every naturally completed room.
+func TestCompletionsCleanedUpAfterNaturalFinish(t *testing.T) {
+	client := newMockAgentClient(map[string]string{})
+	engine := NewChatEngine(client)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("natural finish", []ParticipantConfig{
+		{Name: "A"}, {Name: "B"},
+	}, 5)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	var snap RoomSnapshot
+	for i := 0; i < 50; i++ {
+		s, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room %s not found", roomID)
+		}
+		snap = s
+		if snap.Status == RoomStopped {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", snap.Status)
+	}
+
+	engine.mu.Lock()
+	_, exists := engine.completions[roomID]
+	engine.mu.Unlock()
+	if exists {
+		t.Fatalf("expected completions entry for %s to be deleted after natural finish", roomID)
+	}
+}
+
 func TestBuildOnboarding(t *testing.T) {
 	p := []Participant{{Name: "Baron"}, {Name: "Manager"}}
 	text := buildOnboarding("project", p)

@@ -337,6 +337,7 @@ func (e *ChatEngine) finishRoom(room *Room, cause error) {
 
 	e.mu.Lock()
 	delete(e.active, room.ID)
+	delete(e.completions, room.ID)
 	e.mu.Unlock()
 
 	if cause != nil && cause != context.Canceled {
