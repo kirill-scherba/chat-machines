@@ -118,14 +118,17 @@ When >2 participants:
 
 ### 6. Summary Collection at Chat End
 
-After chat stops (max_rounds, chat_stop, or auto-stop):
-1. Each participant is asked to write a summary
-2. All summaries are collected
-3. A unified digest is stored on the room (`Room.StoredDigest`)
-4. `chat_stop` and `chat_get` return the digest in their response
-5. If `--auto-save` is true, the digest is also saved to memory-store-mcp
+When a room stops (via `chat_stop`, max rounds, or auto-stop), the engine waits synchronously for cleanup:
 
-**Rationale:** The value of chat is the knowledge generated. Returning the digest lets the caller decide where and how to persist it; the default avoids a hidden side effect.
+1. The room goroutine finishes any in-progress round.
+2. Each participant is asked to write a summary.
+3. All summaries are collected and a unified digest is stored on the room (`Room.StoredDigest`).
+4. The room goroutine signals completion.
+5. `chat_stop` returns only after the digest is stored, so its response always contains the digest.
+6. `chat_get` includes the digest for stopped rooms.
+7. If `--auto-save` is true and a `SummarySaver` is configured, the digest is also saved to memory-store-mcp.
+
+**Rationale:** Returning the digest must be deterministic for the caller. The engine therefore waits for summary collection before `chat_stop` returns, and auto-save is an opt-in side effect controlled by the operator.
 
 ### 7. Human-in-Chat via Adjunct
 

@@ -256,8 +256,6 @@ func TestEngineStopRoom(t *testing.T) {
 	if err := engine.StopRoom(roomID); err != nil {
 		t.Fatalf("stop room: %v", err)
 	}
-	// Wait for graceful shutdown and summary collection.
-	time.Sleep(300 * time.Millisecond)
 
 	snap, ok := engine.GetRoomSnapshot(roomID)
 	if !ok {
@@ -265,6 +263,69 @@ func TestEngineStopRoom(t *testing.T) {
 	}
 	if snap.Status != RoomStopped {
 		t.Fatalf("expected stopped, got %s", snap.Status)
+	}
+}
+
+func TestStopRoomReturnsDigest(t *testing.T) {
+	// Mock returns the same text for chat messages and summary prompts, which
+	// is enough to verify that StopRoom returns a populated digest synchronously.
+	responses := map[string]string{
+		"ses_A": "A says hi",
+		"ses_B": "B says hi",
+		"ses_C": "C says hi",
+	}
+	client := newMockAgentClient(responses)
+	engine := NewChatEngine(client)
+	engine.SetRoundDelay(50 * time.Millisecond)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("digest sync", []ParticipantConfig{
+		{Name: "A"},
+		{Name: "B"},
+		{Name: "C"},
+	}, 100)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	// Wait until at least one round completes so sessions are created.
+	for i := 0; i < 50; i++ {
+		snap, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room %s not found", roomID)
+		}
+		if snap.CurrentRound >= 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Stop the room. StopRoom now waits for finishRoom, so the digest must be
+	// available immediately after it returns.
+	if err := engine.StopRoom(roomID); err != nil {
+		t.Fatalf("stop room: %v", err)
+	}
+
+	snap, ok := engine.GetRoomSnapshot(roomID)
+	if !ok {
+		t.Fatalf("room %s not found after stop", roomID)
+	}
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", snap.Status)
+	}
+	if snap.StoredDigest == nil {
+		t.Fatalf("expected digest after StopRoom, got nil")
+	}
+	if snap.StoredDigest.Topic != "digest sync" {
+		t.Fatalf("expected digest topic %q, got %q", "digest sync", snap.StoredDigest.Topic)
+	}
+	if len(snap.StoredDigest.Summaries) != 3 {
+		t.Fatalf("expected 3 summaries, got %d", len(snap.StoredDigest.Summaries))
+	}
+	for _, s := range snap.StoredDigest.Summaries {
+		if s.Text == "" {
+			t.Fatalf("expected non-empty summary text, got %v", s)
+		}
 	}
 }
 
