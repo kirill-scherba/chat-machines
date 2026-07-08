@@ -67,7 +67,7 @@ func main() {
 
 	// Start transport
 	if *httpAddr != "" {
-		srv := server.NewStreamableHTTPServer(mcpServer)
+		srv := server.NewStreamableHTTPServer(mcpServer, server.WithStateLess(true))
 		go func() {
 			log.Printf("MCP HTTP server listening on %s", *httpAddr)
 			if err := srv.Start(*httpAddr); err != nil && err != http.ErrServerClosed {
@@ -102,7 +102,7 @@ func initLogging(logDir string) error {
 	cfg := &ulog.Config{
 		AppShort:  appName,
 		AppType:   "DEV",
-		UseStdout: true,
+		UseStdout: false,
 	}
 	if logDir != "" {
 		if err := os.MkdirAll(logDir, 0755); err != nil {
