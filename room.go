@@ -285,8 +285,13 @@ func (s *RoomStore) SetAdjunct(roomID, sessionID, name string) error {
 	}
 	r.AdjunctSessionID = sessionID
 	r.AdjunctName = name
-	// Create a buffered channel so a human message sent before the engine
-	// reaches its wait select still wakes it up.
+	// Replace any existing channel. Close the old one first so a waiter
+	// currently blocked on it is unblocked, then create a fresh channel
+	// for the new adjunct. This prevents a rejoin from stranding the
+	// engine on a stale channel.
+	if r.humanReady != nil {
+		close(r.humanReady)
+	}
 	r.humanReady = make(chan struct{}, 1)
 	return nil
 }

@@ -219,7 +219,7 @@ func (e *ChatEngine) run(ctx context.Context, room *Room, done chan struct{}) {
 			return
 		}
 
-		done, err := e.runRound(room)
+		done, err := e.runRound(ctx, room)
 		if err != nil {
 			log.Printf("room %s: round error: %v", room.ID, err)
 			e.finishRoom(room, err)
@@ -268,7 +268,7 @@ func (e *ChatEngine) startRoom(room *Room) error {
 }
 
 // runRound executes a single round. Returns true if the chat should stop due to all-OK.
-func (e *ChatEngine) runRound(room *Room) (bool, error) {
+func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 	round := room.IncrementCurrentRound()
 	snap := room.Snapshot()
 	participants := snap.Participants
@@ -362,6 +362,10 @@ func (e *ChatEngine) runRound(room *Room) (bool, error) {
 				if e.logger != nil {
 					_ = e.logger.LogMessage(room.ID, round, snap.AdjunctName, timeoutMsg, time.Now())
 				}
+			case <-ctx.Done():
+				// Room was stopped while waiting for the adjunct.
+				log.Printf("room %s: round %d adjunct wait cancelled", room.ID, round)
+				return false, ctx.Err()
 			}
 		}
 	}

@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Issue #5 in progress** — branch `feature/5`, implementing adjunct round-cycle wait.
+**Issue #5 in review** — PR #6 created, addressing review feedback.
 
 ## Active Issues
 
@@ -10,7 +10,8 @@
 |---|---|---|---|
 | #1 | feat: Чат Машин — Multi-AI chat rooms server | ✅ Done (merged) | `chat-machines`, `go` |
 | #3 | feat: chat_send, human participation mode, digest fixes | 🟣 In review | `chat-machines`, `enhancement` |
-| #5 | fix: adjunct mode — human participant must be waited on in round cycle | 🟡 In progress | `chat-machines`, `bug`, `plan/approved`, `act/in-progress` |
+| #5 | fix: adjunct mode — human participant must be waited on in round cycle | 🟣 In review | `chat-machines`, `bug`, `plan/approved`, `act/in-progress`, `act/review` |
+| #6 | PR: fix: adjunct mode — wait for human in round cycle (#5) | 🟣 In review | — |
 
 ## Issue #3 — Implementation Complete
 
@@ -41,7 +42,7 @@ Implemented in branch `feature/3`. Pull request created.
 - `engine_test.go`: `roundAwareMockAgent`, `TestOKProtocolMixedResponses`, `TestOKProtocolResets`, `TestEngineChatSendAndAdjunct`, `TestStopRoomReturnsDigest`.
 - `docs/DESIGN.md`: updated diagram, design decisions, MCP tool reference.
 
-## Issue #5 — Implementation In Progress
+## Issue #5 — Implementation In Review (PR #6)
 
 ### Goal
 
@@ -53,15 +54,21 @@ Fix adjunct mode so the engine waits for the human participant before finishing 
 |---|---|---|---|
 | 1 | Add `humanReady chan struct{}` to Room; signal from `AddExternalMessage` | `room.go` | ✅ |
 | 2 | Channel lifecycle in `SetAdjunct`/`ClearAdjunct`; `HasAdjunct` snapshot field | `room.go` | ✅ |
-| 3 | Adjunct wait block in `runRound()` after AI responses (select on `humanReady` + timeout) | `engine.go` | ✅ |
+| 3 | Adjunct wait block in `runRound()` after AI responses (select on `humanReady` + timeout + `ctx.Done()`) | `engine.go` | ✅ |
 | 4 | `--adjunct-timeout` flag wired to engine | `main.go` | ✅ |
 | 5 | Relax `chat_create` min participants 2→1; update system instructions | `server.go` | ✅ |
-| 6 | 5 tests (WaitBlocks, Timeout, MultipleRounds, OneParticipant, LeaveUnblocks) | `engine_test.go` | ✅ |
+| 6 | 7 tests covering wait, timeout, multiple rounds, one participant, leave-unblocks, stop-while-waiting, rejoin | `engine_test.go` | ✅ |
 | 7 | Update Memory Bank docs (DESIGN.md, STATUS.md) | `docs/*.md` | ✅ |
+
+### Pull Request
+
+- **PR #6**: https://github.com/kirill-scherba/chat-machines/pull/6
 
 ### Architecture Decisions
 
 - **Channel-based wait**: buffered `humanReady chan struct{}` (capacity 1) avoids polling latency and naturally absorbs the race where the human sends before the engine enters its wait select.
+- **Context-aware wait**: `runRound` receives the room context and aborts the adjunct wait on cancellation, so `StopRoom`/`StopAll` never hang on the timeout.
+- **Safe rejoin**: `SetAdjunct` closes the old `humanReady` channel before creating a new one, preventing the engine from being stranded on a stale channel.
 - **Human NOT in OK-protocol**: human timeout/presence is orthogonal to the AI OK-counter auto-stop.
 - **Timeout default**: 5 minutes, configurable via `--adjunct-timeout`.
 - **AI-only rooms unaffected**: adjunct check skipped when `AdjunctName == ""`.
@@ -76,4 +83,5 @@ Fix adjunct mode so the engine waits for the human participant before finishing 
 ## Last Updated
 
 2026-07-08 — Issue #3 implemented by Master; PR created and moved to In review.
-2026-07-08 — Issue #5 planned, approved, and moved to In progress.
+2026-07-08 — Issue #5 planned, approved, moved to In progress, and PR #6 created.
+2026-07-08 — PR #6 review feedback addressed: context cancellation, safe rejoin, regression tests, docs sync.

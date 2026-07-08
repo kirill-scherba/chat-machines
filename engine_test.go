@@ -828,6 +828,142 @@ func TestAdjunctLeaveUnblocks(t *testing.T) {
 	}
 }
 
+func TestStopRoomWhileAdjunctWaiting(t *testing.T) {
+	responses := map[string]string{"ses_A": "hello from A"}
+	client := newMockAgentClient(responses)
+	engine := NewChatEngine(client)
+	engine.SetRoundDelay(10 * time.Millisecond)
+	engine.SetAdjunctTimeout(1 * time.Hour) // long timeout to prove StopRoom is fast
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("stop while waiting", []ParticipantConfig{
+		{Name: "A"},
+	}, 100)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	if err := engine.SetAdjunct(roomID, "ses_Kirill", "Kirill"); err != nil {
+		t.Fatalf("join adjunct: %v", err)
+	}
+
+	// Wait until the AI has responded and the engine is waiting for the human.
+	foundAI := false
+	for i := 0; i < 50; i++ {
+		snap, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room %s not found", roomID)
+		}
+		for _, m := range snap.Messages {
+			if m.From == "A" && m.Round == 1 {
+				foundAI = true
+				break
+			}
+		}
+		if foundAI {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !foundAI {
+		t.Fatalf("expected AI message in round 1")
+	}
+
+	// StopRoom must return promptly even though the engine is waiting for the adjunct.
+	start := time.Now()
+	if err := engine.StopRoom(roomID); err != nil {
+		t.Fatalf("stop room: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("StopRoom took too long while adjunct was waiting: %v", elapsed)
+	}
+
+	snap, _ := engine.GetRoomSnapshot(roomID)
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", snap.Status)
+	}
+}
+
+func TestAdjunctRejoinUnblocksWaiter(t *testing.T) {
+	responses := map[string]string{"ses_A": "hello from A"}
+	client := newMockAgentClient(responses)
+	engine := NewChatEngine(client)
+	engine.SetRoundDelay(10 * time.Millisecond)
+	engine.SetAdjunctTimeout(1 * time.Hour)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("adjunct rejoin", []ParticipantConfig{
+		{Name: "A"},
+	}, 2)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	if err := engine.SetAdjunct(roomID, "ses_Kirill", "Kirill"); err != nil {
+		t.Fatalf("join adjunct: %v", err)
+	}
+
+	// Wait until the engine is waiting for Kirill in round 1.
+	foundAI := false
+	for i := 0; i < 50; i++ {
+		snap, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room %s not found", roomID)
+		}
+		for _, m := range snap.Messages {
+			if m.From == "A" && m.Round == 1 {
+				foundAI = true
+				break
+			}
+		}
+		if foundAI {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !foundAI {
+		t.Fatalf("expected AI message in round 1")
+	}
+
+	// Rejoin with a different name/session. The old channel must be closed so
+	// the engine doesn't hang, and the new adjunct must be able to respond.
+	if err := engine.SetAdjunct(roomID, "ses_Baron", "Baron"); err != nil {
+		t.Fatalf("rejoin adjunct: %v", err)
+	}
+
+	if err := engine.AddExternalMessage(roomID, "Baron", "Hi from Baron"); err != nil {
+		t.Fatalf("chat send from new adjunct: %v", err)
+	}
+
+	// Wait for the room to finish.
+	var snap RoomSnapshot
+	for i := 0; i < 50; i++ {
+		s, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room %s not found", roomID)
+		}
+		snap = s
+		if snap.Status == RoomStopped {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", snap.Status)
+	}
+
+	foundBaron := false
+	for _, m := range snap.Messages {
+		if m.From == "Baron" && m.Text == "Hi from Baron" {
+			foundBaron = true
+		}
+	}
+	if !foundBaron {
+		t.Fatalf("expected message from rejoined adjunct Baron, got: %v", snap.Messages)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSub(s, substr))
 }

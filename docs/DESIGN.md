@@ -149,10 +149,12 @@ When an adjunct is active, the engine pauses at the end of each round after coll
 1. `SetAdjunct` creates the channel with capacity 1.
 2. `AddExternalMessage` appends the human message to the transcript and signals the channel.
 3. `runRound()` reads from the channel after recording AI responses.
-4. If the human does not respond within the configured timeout (default 5 minutes, configurable via `--adjunct-timeout`), the engine records an `(adjunct timeout)` marker and proceeds to the next round.
-5. `ClearAdjunct` closes the channel, which unblocks the engine if it is currently waiting.
+4. The wait select also watches the room context, so `StopRoom`/`StopAll` abort the wait immediately and do not block until the timeout.
+5. If the human does not respond within the configured timeout (default 5 minutes, configurable via `--adjunct-timeout`), the engine records an `(adjunct timeout)` marker and proceeds to the next round.
+6. `ClearAdjunct` closes the channel, which unblocks the engine if it is currently waiting.
+7. A new `SetAdjunct` call closes any previous channel first, so a rejoin cannot strand the engine on a stale channel.
 
-**Rationale:** The buffered channel avoids polling latency/CPU waste, absorbs the race where the human sends a message before the engine reaches its wait select, and naturally handles multiple human messages per round (only the first signal is needed).
+**Rationale:** The buffered channel avoids polling latency/CPU waste, absorbs the race where the human sends a message before the engine reaches its wait select, and naturally handles multiple human messages per round (only the first signal is needed). Watching the context in the same select preserves the existing prompt shutdown semantics.
 
 ### 8. Agent Interface for Testability
 
