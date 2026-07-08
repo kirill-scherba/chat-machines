@@ -61,6 +61,11 @@ type Room struct {
 	AdjunctSessionID string
 	AdjunctName      string
 
+	// humanReady is signaled by AddExternalMessage when a human adjunct
+	// sends a message via chat_send. Created by SetAdjunct (capacity 1),
+	// read by runRound's select, closed by ClearAdjunct.
+	humanReady chan struct{}
+
 	// StoredDigest is the post-chat summary digest computed when the room
 	// stops. It is returned by chat_stop and chat_get instead of being saved
 	// directly to memory-store-mcp.
@@ -83,6 +88,7 @@ type RoomSnapshot struct {
 	OKRounds         int           `json:"ok_rounds"`
 	AdjunctSessionID string        `json:"adjunct_session_id,omitempty"`
 	AdjunctName      string        `json:"adjunct_name,omitempty"`
+	HasAdjunct       bool          `json:"has_adjunct"`
 	StoredDigest     *Digest       `json:"digest,omitempty"`
 }
 
@@ -113,6 +119,7 @@ func (r *Room) Snapshot() RoomSnapshot {
 		OKRounds:         r.okRounds,
 		AdjunctSessionID: r.AdjunctSessionID,
 		AdjunctName:      r.AdjunctName,
+		HasAdjunct:       r.AdjunctName != "",
 		StoredDigest:     r.StoredDigest,
 	}
 }
@@ -255,6 +262,13 @@ func (s *RoomStore) AddExternalMessage(roomID, from, text string) error {
 		Text:      text,
 		Timestamp: time.Now(),
 	})
+	// Signal the engine goroutine that the human has spoken.
+	if r.humanReady != nil {
+		select {
+		case r.humanReady <- struct{}{}:
+		default: // engine already got the signal for this round
+		}
+	}
 	return nil
 }
 
@@ -271,6 +285,9 @@ func (s *RoomStore) SetAdjunct(roomID, sessionID, name string) error {
 	}
 	r.AdjunctSessionID = sessionID
 	r.AdjunctName = name
+	// Create a buffered channel so a human message sent before the engine
+	// reaches its wait select still wakes it up.
+	r.humanReady = make(chan struct{}, 1)
 	return nil
 }
 
@@ -282,6 +299,10 @@ func (s *RoomStore) ClearAdjunct(roomID string) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.humanReady != nil {
+		close(r.humanReady)
+		r.humanReady = nil
+	}
 	r.AdjunctSessionID = ""
 	r.AdjunctName = ""
 	return nil
@@ -353,6 +374,20 @@ func (r *Room) GetOKRounds() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.okRounds
+}
+
+// HasAdjunct reports whether a human adjunct is currently joined.
+func (r *Room) HasAdjunct() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.AdjunctName != ""
+}
+
+// GetHumanReady returns the human-ready channel, or nil if no adjunct is joined.
+func (r *Room) GetHumanReady() chan struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.humanReady
 }
 
 // UpdateOKRounds updates the consecutive OK counter and returns whether stop is triggered.

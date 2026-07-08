@@ -30,6 +30,7 @@ type ChatEngine struct {
 	summary         SummarySaver
 	summaryAutoSave bool
 	roundDelay      time.Duration
+	adjunctTimeout  time.Duration
 
 	// active rooms keyed by room id; value is the cancel function for the room goroutine.
 	active map[string]context.CancelFunc
@@ -52,6 +53,12 @@ func NewChatEngine(agent Agent) *ChatEngine {
 // SetRoundDelay configures the pause between rounds. Useful in tests.
 func (e *ChatEngine) SetRoundDelay(d time.Duration) {
 	e.roundDelay = d
+}
+
+// SetAdjunctTimeout configures how long the engine waits for a human adjunct
+// to respond before continuing a round. Default is 5 minutes.
+func (e *ChatEngine) SetAdjunctTimeout(d time.Duration) {
+	e.adjunctTimeout = d
 }
 
 // SetLogger sets an optional message logger.
@@ -320,6 +327,42 @@ func (e *ChatEngine) runRound(room *Room) (bool, error) {
 		}
 		if !IsOKResponse(resp) {
 			allOK = false
+		}
+	}
+
+	// If a human adjunct is joined, wait for them to respond before
+	// finishing the round. The human message is injected via chat_send
+	// (AddExternalMessage), which appends it to the transcript and signals
+	// the humanReady channel. If they don't respond within the timeout,
+	// record a timeout marker and continue.
+	if snap.AdjunctName != "" {
+		ch := room.GetHumanReady()
+		if ch != nil {
+			timeout := e.adjunctTimeout
+			if timeout <= 0 {
+				timeout = 5 * time.Minute
+			}
+			select {
+			case _, ok := <-ch:
+				if !ok {
+					// Adjunct left while we were waiting.
+					log.Printf("room %s: round %d adjunct left while waiting", room.ID, round)
+				}
+			case <-time.After(timeout):
+				timeoutMsg := "(adjunct timeout)"
+				log.Printf("room %s: round %d adjunct timeout", room.ID, round)
+				if err := e.store.AddMessage(room.ID, Message{
+					Round:     round,
+					From:      snap.AdjunctName,
+					Text:      timeoutMsg,
+					Timestamp: time.Now(),
+				}); err != nil {
+					return false, err
+				}
+				if e.logger != nil {
+					_ = e.logger.LogMessage(room.ID, round, snap.AdjunctName, timeoutMsg, time.Now())
+				}
+			}
 		}
 	}
 
