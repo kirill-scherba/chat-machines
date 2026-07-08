@@ -35,9 +35,11 @@ Rules:
   The caller is responsible for saving it if needed.
 - You may participate in a chat as an adjunct:
   1. chat_join(room_id) to connect your session to the room.
-  2. poll chat_get(room_id) for new messages and relay them to the user.
-  3. when the user speaks, call chat_send(room_id, message) to inject it.
-  4. chat_leave(room_id) when done.
+  2. The engine pauses at the end of each round and waits for you.
+  3. poll chat_get(room_id) for new messages and relay them to the user.
+  4. when the user speaks, call chat_send(room_id, message) to inject it and unblock the round.
+  5. If you don't respond within the timeout (default 5m), the round continues without you.
+  6. chat_leave(room_id) when done.
 `
 
 // NewMCPServer creates and registers all chat-machines MCP tools.
@@ -98,8 +100,8 @@ func chatCreateTool(engine *ChatEngine) server.ServerTool {
 			}
 
 			raw, ok := args["participants"].([]any)
-			if !ok || len(raw) < 2 {
-				return resultError(fmt.Errorf("at least 2 participants are required"))
+			if !ok || len(raw) < 1 {
+				return resultError(fmt.Errorf("at least 1 participant is required; use chat_join to add a human adjunct"))
 			}
 
 			configs := make([]ParticipantConfig, 0, len(raw))

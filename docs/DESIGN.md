@@ -142,6 +142,20 @@ The adjunct is stored as room metadata (`AdjunctSessionID`, `AdjunctName`), not 
 
 **Rationale:** No special "human session" needed; the human is an observer who can interject.
 
+### 7a. Adjunct Round-Cycle Wait
+
+When an adjunct is active, the engine pauses at the end of each round after collecting AI responses and waits for the human to speak. The synchronization is implemented via a buffered `humanReady chan struct{}` on the `Room`:
+
+1. `SetAdjunct` creates the channel with capacity 1.
+2. `AddExternalMessage` appends the human message to the transcript and signals the channel.
+3. `runRound()` reads from the channel after recording AI responses.
+4. The wait select also watches the room context, so `StopRoom`/`StopAll` abort the wait immediately and do not block until the timeout.
+5. If the human does not respond within the configured timeout (default 5 minutes, configurable via `--adjunct-timeout`), the engine records an `(adjunct timeout)` marker and proceeds to the next round.
+6. `ClearAdjunct` closes the channel, which unblocks the engine if it is currently waiting.
+7. A new `SetAdjunct` call closes any previous channel first, so a rejoin cannot strand the engine on a stale channel.
+
+**Rationale:** The buffered channel avoids polling latency/CPU waste, absorbs the race where the human sends a message before the engine reaches its wait select, and naturally handles multiple human messages per round (only the first signal is needed). Watching the context in the same select preserves the existing prompt shutdown semantics.
+
 ### 8. Agent Interface for Testability
 
 `ChatEngine` depends on the `Agent` interface, not directly on `*AgentClient`:
@@ -190,6 +204,7 @@ chat-machines \
   --memory-mcp http://127.0.0.1:7708/mcp \ # memory-store-mcp address
   --auto-save \                            # auto-save digest to memory-store-mcp (default: false)
   --timeout 120s \                          # per-message timeout
+  --adjunct-timeout 5m \                    # human adjunct response timeout (default: 5m)
   --log-dir /var/log/chat-machines          # file logging (optional)
 ```
 
@@ -197,10 +212,10 @@ chat-machines \
 
 | Tool | Purpose |
 |---|---|
-| `chat_create` | Create and start a multi-AI chat room |
+| `chat_create` | Create and start a multi-AI chat room (1+ participants; human adjunct can be added via `chat_join`) |
 | `chat_list` | List active rooms |
 | `chat_get` | Get room state (includes `digest` for stopped rooms) |
-| `chat_send` | Inject a message from a human into the room |
+| `chat_send` | Inject a message from a human into the room (also unblocks the round cycle when an adjunct is waiting) |
 | `chat_join` | Join a room as a human adjunct |
 | `chat_leave` | Leave a room as a human adjunct |
 | `chat_stop` | Stop a room and return the summary digest |
