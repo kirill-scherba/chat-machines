@@ -351,11 +351,11 @@ func (s *RoomStore) SetDigest(roomID string, digest *Digest) error {
 	return nil
 }
 
-// AddExternalParticipantMessage records a message from an external participant
-// in the transcript and signals the participant's ready channel (non-blocking).
-// The engine reads the same text via GetExternalResponse during runRound to
-// compute the OK protocol without duplicating the transcript entry.
-func (s *RoomStore) AddExternalParticipantMessage(logger ChatLogger, roomID, name, text string) error {
+// AddExternalParticipantMessage stores a message from an external participant
+// and signals the participant's ready channel (non-blocking). The engine is the
+// sole writer of transcript entries for external participants: runRound reads
+// the stored text via GetExternalResponse and appends it to the transcript.
+func (s *RoomStore) AddExternalParticipantMessage(roomID, name, text string) error {
 	r := s.GetRoom(roomID)
 	if r == nil {
 		return fmt.Errorf("room %s not found", roomID)
@@ -384,18 +384,7 @@ func (s *RoomStore) AddExternalParticipantMessage(logger ChatLogger, roomID, nam
 		r.externalChannels = make(map[string]chan struct{})
 	}
 
-	now := time.Now()
-	r.Messages = append(r.Messages, Message{
-		Round:     r.CurrentRound,
-		From:      name,
-		Text:      text,
-		Timestamp: now,
-	})
-	if logger != nil {
-		_ = logger.LogMessage(roomID, r.CurrentRound, name, text, now)
-	}
-
-	// Store response text for runRound to collect.
+	// Store response text for runRound to collect and record in the transcript.
 	r.externalResps[name] = text
 
 	// Signal the engine goroutine that this external has spoken.

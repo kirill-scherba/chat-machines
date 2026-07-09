@@ -141,7 +141,8 @@ Add External Chat Connector (ECC) — HTTP bridge that lets external AI services
 | 11 | `--external-addr` and `--external-base-url` flags | `main.go` | ✅ |
 | 12 | Engine tests for external participants | `engine_test.go` | ✅ |
 | 13 | External endpoint tests | `external_test.go` | ✅ |
-| 14 | Update DESIGN.md and STATUS.md | `docs/*.md` | ✅ |
+| 14 | Review fixes: transcript ownership, final reply skip, exact-count tests | `engine.go`, `room.go`, `engine_test.go`, `external_test.go` | ✅ |
+| 15 | Update DESIGN.md and STATUS.md | `docs/*.md` | ✅ |
 
 ### Architecture Decisions
 
@@ -150,6 +151,7 @@ Add External Chat Connector (ECC) — HTTP bridge that lets external AI services
 - **Token-based auth**: UUID token stored as unexported `Participant.token`; not serialized in snapshots or logs.
 - **Single GET endpoint**: `GET /room/{room_id}/external?token=...&body=...` for ChatGPT Actions compatibility.
 - **Skill template**: returned on `connect` for `human+agent` type to guide the external AI assistant.
+- **Transcript ownership**: `runRound` is the sole writer of external participant transcript entries; `AddExternalParticipantMessage` only queues the text and signals the ready channel.
 - **Backward compatibility**: empty `Participant.Type` treated as `"ai"`; existing callers and tests unchanged.
 
 ### Pull Request

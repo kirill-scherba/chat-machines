@@ -96,7 +96,7 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 				http.Error(w, `{"error":"message is required for action=send"}`, http.StatusBadRequest)
 				return
 			}
-			if err := engine.store.AddExternalParticipantMessage(engine.logger, roomID, p.Name, body.Message); err != nil {
+			if err := engine.store.AddExternalParticipantMessage(roomID, p.Name, body.Message); err != nil {
 				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusConflict)
 				return
 			}

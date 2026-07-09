@@ -1159,7 +1159,7 @@ func TestRunRoundWaitsForExternalParticipant(t *testing.T) {
 	}
 
 	// External participant sends a message.
-	if err := engine.store.AddExternalParticipantMessage(engine.logger, roomID, "Lena", "hi everyone"); err != nil {
+	if err := engine.store.AddExternalParticipantMessage(roomID, "Lena", "hi everyone"); err != nil {
 		t.Fatalf("add external message: %v", err)
 	}
 
@@ -1264,9 +1264,9 @@ func TestMultipleExternalParticipants(t *testing.T) {
 	}
 
 	time.Sleep(200 * time.Millisecond)
-	engine.store.AddExternalParticipantMessage(engine.logger, roomID, "X", "x message")
+	engine.store.AddExternalParticipantMessage(roomID, "X", "x message")
 	time.Sleep(50 * time.Millisecond)
-	engine.store.AddExternalParticipantMessage(engine.logger, roomID, "Y", "y message")
+	engine.store.AddExternalParticipantMessage(roomID, "Y", "y message")
 
 	var snap RoomSnapshot
 	for i := 0; i < 50; i++ {
