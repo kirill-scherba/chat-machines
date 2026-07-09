@@ -2,16 +2,18 @@
 
 ## Current Phase
 
-**Issue #5 in review** — PR #6 created, addressing review feedback.
+**Issue #7 in review** — PR #9 created, awaiting merge.
 
 ## Active Issues
 
 | Number | Title | Status | Labels |
 |---|---|---|---|
 | #1 | feat: Чат Машин — Multi-AI chat rooms server | ✅ Done (merged) | `chat-machines`, `go` |
-| #3 | feat: chat_send, human participation mode, digest fixes | 🟣 In review | `chat-machines`, `enhancement` |
-| #5 | fix: adjunct mode — human participant must be waited on in round cycle | 🟣 In review | `chat-machines`, `bug`, `plan/approved`, `act/in-progress`, `act/review` |
-| #6 | PR: fix: adjunct mode — wait for human in round cycle (#5) | 🟣 In review | — |
+| #3 | feat: chat_send, human participation mode, digest fixes | ✅ Done (merged) | `chat-machines`, `enhancement` |
+| #5 | fix: adjunct mode — human participant must be waited on in round cycle | ✅ Done (merged) | `chat-machines`, `bug`, `plan/approved` |
+| #6 | PR: fix: adjunct mode — wait for human in round cycle (#5) | ✅ Done (merged) | — |
+| #7 | fix: human as full participant — round cycle must count human reply | 🟣 In review | `bug`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
+| #9 | PR: fix: human as full participant — count round after everyone speaks (#7) | 🟣 In review | — |
 
 ## Issue #3 — Implementation Complete
 
@@ -41,6 +43,39 @@ Implemented in branch `feature/3`. Pull request created.
 - `main.go`: `--auto-save` flag wired to engine.
 - `engine_test.go`: `roundAwareMockAgent`, `TestOKProtocolMixedResponses`, `TestOKProtocolResets`, `TestEngineChatSendAndAdjunct`, `TestStopRoomReturnsDigest`.
 - `docs/DESIGN.md`: updated diagram, design decisions, MCP tool reference.
+
+## Issue #7 — Implementation In Review (PR #9)
+
+### Goal
+
+Fix the round cycle so the human adjunct is a full participant: a round is complete only when all AIs and the human have spoken. This resolves both the "last-message loss" bug and the "round counting" bug.
+
+### Completed Items
+
+| # | Item | Files | Status |
+|---|---|---|---|
+| 1 | Move round increment from start to end of `runRound()` | `engine.go` | ✅ |
+| 2 | Update first-round detection and transcript display for 0-based numbering | `engine.go` | ✅ |
+| 3 | Update test assertions for 0-based message round numbers | `engine_test.go` | ✅ |
+| 4 | Rewrite `TestAdjunctMultipleRounds` goroutine to detect AI round messages | `engine_test.go` | ✅ |
+| 5 | Add `TestHumanLastMessageNotLost` covering the exact bug scenario | `engine_test.go` | ✅ |
+| 6 | Update Memory Bank docs (DESIGN.md, STATUS.md) | `docs/*.md` | ✅ |
+
+### Architecture Decisions
+
+- **Post-round increment**: `CurrentRound` is incremented after the adjunct has spoken (or timed out). This guarantees the final human message always gets an AI reply.
+- **0-based internal numbering**: Messages are tagged with round numbers `0, 1, 2` for a 3-round chat. AI prompts still display `[Round 1/3]`, `[Round 2/3]`, etc. No API rename of `adjunct`.
+- **Max-rounds check after increment**: `CurrentRound >= MaxRounds` is checked after a round completes, not before it starts.
+
+### Pull Request
+
+- **PR #9**: https://github.com/kirill-scherba/chat-machines/pull/9
+
+### Verification
+
+- `go build ./...` — ✅
+- `go vet ./...` — ✅
+- `go test -race ./...` — ✅
 
 ## Issue #5 — Implementation In Review (PR #6)
 
