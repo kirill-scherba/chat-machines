@@ -1377,4 +1377,3 @@ func TestRunFinalReplySkipsExternalParticipants(t *testing.T) {
 		t.Fatalf("expected exactly one Human message, got %d: %v", counts["Human"], room.Messages)
 	}
 }
-
