@@ -1024,7 +1024,11 @@ func TestHumanLastMessageNotLost(t *testing.T) {
 		t.Fatalf("expected 3 rounds, got %d", snap.CurrentRound)
 	}
 
-	// Verify: 3 AI messages + 3 human messages = 6 messages total.
+	// Verify: the human got a reply to each of their 3 messages.
+	// In the AI-first model there is an initial AI opener, then one AI reply
+	// per human message, so we expect 4 AI messages and 3 human messages.
+	// The critical issue #7 requirement: the final transcript message must be
+	// from the AI, not from the human.
 	ai, human := 0, 0
 	for _, m := range snap.Messages {
 		if m.From == "A" {
@@ -1034,11 +1038,18 @@ func TestHumanLastMessageNotLost(t *testing.T) {
 			human++
 		}
 	}
-	if ai != 3 {
-		t.Fatalf("expected 3 AI msgs, got %d: %v", ai, snap.Messages)
-	}
 	if human != 3 {
 		t.Fatalf("expected 3 human msgs, got %d: %v", human, snap.Messages)
+	}
+	if ai != 4 {
+		t.Fatalf("expected 4 AI msgs (opener + 3 replies), got %d: %v", ai, snap.Messages)
+	}
+	if len(snap.Messages) == 0 {
+		t.Fatal("expected messages")
+	}
+	last := snap.Messages[len(snap.Messages)-1]
+	if last.From != "A" {
+		t.Fatalf("expected final message from AI, got %s: %v", last.From, snap.Messages)
 	}
 }
 

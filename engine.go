@@ -372,6 +372,19 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 
 	// Mark round as complete — everyone (AI + human) has now spoken.
 	completedRound := room.IncrementCurrentRound()
+
+	// If max rounds were reached and the last thing said was by the human
+	// adjunct, give the AI(s) a chance to reply to that final message before
+	// stopping. Without this, the human's last message would be lost (issue #7).
+	if completedRound >= snap.MaxRounds && snap.AdjunctName != "" &&
+		lastMessageIsFromAdjunct(room, snap.AdjunctName) {
+		log.Printf("room %s: max rounds reached with pending human message, running final reply", room.ID)
+		if err := e.runFinalReply(ctx, room, round, participants); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
 	if completedRound >= snap.MaxRounds {
 		log.Printf("room %s: round %d complete, max rounds (%d) reached",
 			room.ID, completedRound, snap.MaxRounds)
@@ -384,6 +397,62 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 	}
 
 	return stop, nil
+}
+
+// runFinalReply sends one more AI response round after max_rounds has been
+// reached, so the final human message is not left without an answer. The
+// round counter is not incremented — this reply is an extension of the
+// round that just completed.
+func (e *ChatEngine) runFinalReply(ctx context.Context, room *Room, round int, participants []Participant) error {
+	log.Printf("room %s: final reply round %d/%d", room.ID, round+1, room.GetMaxRounds())
+
+	// Build transcript that includes the human's last message (round `round`)
+	// and all earlier messages, so the AI can reply in context.
+	transcript := buildTranscriptForRounds(room, round, participants, []int{round})
+
+	responses := make([]string, len(participants))
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var roundErr error
+
+	for i, p := range participants {
+		wg.Add(1)
+		go func(idx int, part Participant) {
+			defer wg.Done()
+			text := fmt.Sprintf("%s\n\nYour turn, %s. Write your response (or \"OK\" if nothing to say).", transcript, part.Name)
+			resp, err := e.agent.SendMessage(part.SessionID, text, part.Agent, part.Model)
+			if err != nil {
+				errOnce.Do(func() { roundErr = fmt.Errorf("%s: %w", part.Name, err) })
+				resp = fmt.Sprintf("(timeout: %s)", err)
+			}
+			responses[idx] = resp
+		}(i, p)
+	}
+
+	wg.Wait()
+	if roundErr != nil {
+		log.Printf("room %s: final reply round %d had participant error(s): %v", room.ID, round+1, roundErr)
+	}
+
+	now := time.Now()
+	for i, p := range participants {
+		resp := strings.TrimSpace(responses[i])
+		msg := Message{
+			Round:     round,
+			From:      p.Name,
+			Text:      resp,
+			Timestamp: now,
+		}
+		if err := e.store.AddMessage(room.ID, msg); err != nil {
+			return err
+		}
+		if e.logger != nil {
+			_ = e.logger.LogMessage(room.ID, round, p.Name, resp, now)
+		}
+	}
+
+	time.Sleep(e.roundDelay)
+	return nil
 }
 
 // finishRoom stops the room and collects summary.
@@ -515,10 +584,19 @@ func buildHeader(topic string, participants []Participant) string {
 
 // buildTranscript builds the previous-round transcript for distribution.
 func buildTranscript(room *Room, round int, participants []Participant) string {
+	return buildTranscriptForRounds(room, round, participants, []int{round - 1})
+}
+
+// buildTranscriptForRounds builds a transcript from the specified round numbers.
+func buildTranscriptForRounds(room *Room, round int, participants []Participant, rounds []int) string {
 	var sb strings.Builder
 	sb.WriteString(buildHeader(room.Topic, participants))
 	sb.WriteString(fmt.Sprintf("\n\n[Round %d/%d]\n", round+1, room.MaxRounds))
-	messages := room.MessagesForRound(round - 1)
+
+	var messages []Message
+	for _, r := range rounds {
+		messages = append(messages, room.MessagesForRound(r)...)
+	}
 	if len(messages) == 0 {
 		sb.WriteString("(no previous messages)\n")
 	} else {
@@ -528,6 +606,18 @@ func buildTranscript(room *Room, round int, participants []Participant) string {
 		}
 	}
 	return sb.String()
+}
+
+// lastMessageIsFromAdjunct reports whether the most recent message in the room
+// transcript was sent by the human adjunct.
+func lastMessageIsFromAdjunct(room *Room, adjunctName string) bool {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	if len(room.Messages) == 0 {
+		return false
+	}
+	last := room.Messages[len(room.Messages)-1]
+	return last.From == adjunctName
 }
 
 // ParticipantConfig is the user-provided configuration for a participant.

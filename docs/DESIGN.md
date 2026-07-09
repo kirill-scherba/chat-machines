@@ -156,6 +156,12 @@ When an adjunct is active, the engine pauses at the end of each round after coll
 
 **Rationale:** The buffered channel avoids polling latency/CPU waste, absorbs the race where the human sends a message before the engine reaches its wait select, and naturally handles multiple human messages per round (only the first signal is needed). Watching the context in the same select preserves the existing prompt shutdown semantics.
 
+**Round counting:** `CurrentRound` is incremented at the **end** of `runRound()`, after the adjunct has spoken (or timed out). This ensures a round is considered complete only when **all participants** (AI + human) have contributed.
+
+**Final reply round:** If `CurrentRound` reaches `MaxRounds` and the most recent transcript message was sent by the human adjunct, the engine runs one additional AI response round (without incrementing the counter) before stopping. This prevents the human's final message from being left unanswered.
+
+**Internal numbering:** `CurrentRound` starts at 0 and is 0-based internally (messages tagged 0, 1, 2 for a 3-round chat). AI prompts display `round+1` for human-friendly numbering (`[Round 1/3]`). API responses return the 0-based value directly.
+
 ### 8. Agent Interface for Testability
 
 `ChatEngine` depends on the `Agent` interface, not directly on `*AgentClient`:
