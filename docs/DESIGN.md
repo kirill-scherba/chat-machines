@@ -227,6 +227,50 @@ chat-machines \
 | `chat_stop` | Stop a room and return the summary digest |
 | `chat_stats` | Global chat statistics |
 
+## 8. External Chat Connector (ECC)
+
+External participants connect via HTTP instead of opencode-serve. They are full
+round-robin participants in the room and are treated the same as AI participants
+by the engine, except their "turn" is fulfilled by polling a dedicated endpoint.
+
+### 8.1 Endpoint
+
+```
+GET /room/{room_id}/external?token={token}&body={URL-ENCODED_JSON}
+```
+
+The `body` parameter decodes to `{ "action": "connect" | "send", "message": "..." }`.
+`token` is a UUID generated per external participant when the room is created.
+
+### 8.2 Data Model
+
+- `Participant.Type` — `"ai"` (default) or `"external"`
+- `Participant.Role` — `"controller"` or `"participant"` (external only)
+- `Participant.HumanType` — `"human"` or `"human+agent"` (external only)
+- `Participant.token` — unexported UUID for endpoint auth
+- `Participant.ready` — buffered `chan struct{}`, signalled when the external sends
+- `Room.externalChannels` — maps participant name to the ready channel for HTTP handler lookup
+- `Room.externalResps` — maps participant name to the latest pending response text
+
+### 8.3 Round Cycle
+
+`runRound` launches one goroutine per participant. AI participants use
+`agent.SendMessage`; external participants wait on their `ready` channel with the
+configured timeout. When the external endpoint receives a message it:
+
+1. Appends the message to the transcript with the current round number.
+2. Stores the text in `externalResps`.
+3. Signals the `ready` channel.
+
+The engine goroutine reads the response and applies the OK protocol just like an
+AI response.
+
+### 8.4 Backward Compatibility
+
+- Empty `Participant.Type` is treated as `"ai"`.
+- Existing rooms, tests, and callers work without changes.
+- External endpoint is optional: disabled when `--external-addr` is empty.
+
 ## Future Extensions (not in v1)
 
 - **Scenarios/Templates:** Predefined chat patterns

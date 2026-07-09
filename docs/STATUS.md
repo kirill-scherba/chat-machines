@@ -13,6 +13,7 @@
 | #5 | fix: adjunct mode — human participant must be waited on in round cycle | ✅ Done (merged) | `chat-machines`, `bug`, `plan/approved` |
 | #6 | PR: fix: adjunct mode — wait for human in round cycle (#5) | ✅ Done (merged) | — |
 | #7 | fix: human as full participant — round cycle must count human reply | 🟣 In review | `bug`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
+| #8 | feat: External Chat Connector (ECC) — HTTP bridge | 🟣 In review | `enhancement`, `plan/draft`, `plan/improve`, `plan/approved`, `act/in-progress`, `act/review` |
 | #9 | PR: fix: human as full participant — count round after everyone speaks (#7) | 🟣 In review | — |
 
 ## Issue #3 — Implementation Complete
@@ -116,8 +117,55 @@ Fix adjunct mode so the engine waits for the human participant before finishing 
 - `go test ./...` — ✅
 - `go vet ./...` — ✅
 
+## Issue #8 — Implementation In Review (PR #10)
+
+### Goal
+
+Add External Chat Connector (ECC) — HTTP bridge that lets external AI services
+(ChatGPT, DeepSeek, Claude, Kimi) participate as first-class chat room members.
+
+### Completed Items
+
+| # | Item | Files | Status |
+|---|---|---|---|
+| 1 | Extend `Participant` with Type/Role/HumanType, token, ready channel | `room.go` | ✅ |
+| 2 | Extend `Room` with externalChannels/externalResps maps | `room.go` | ✅ |
+| 3 | `RoomStore.AddExternalParticipantMessage` + token lookup helpers | `room.go` | ✅ |
+| 4 | Extend `ParticipantConfig` and `CreateChatRoom` for externals | `engine.go` | ✅ |
+| 5 | `startRoom` skips opencode sessions for externals | `engine.go` | ✅ |
+| 6 | `runRound` waits on per-participant channels for externals | `engine.go` | ✅ |
+| 7 | `finishRoom` skips external participants in summaries | `engine.go` | ✅ |
+| 8 | New `GET /room/{id}/external` endpoint (connect/send) | `external.go` | ✅ |
+| 9 | Skill template for `human+agent` participants | `external.go` | ✅ |
+| 10 | `chat_create` accepts type/role/human_type, returns `external_urls` | `server.go` | ✅ |
+| 11 | `--external-addr` and `--external-base-url` flags | `main.go` | ✅ |
+| 12 | Engine tests for external participants | `engine_test.go` | ✅ |
+| 13 | External endpoint tests | `external_test.go` | ✅ |
+| 14 | Update DESIGN.md and STATUS.md | `docs/*.md` | ✅ |
+
+### Architecture Decisions
+
+- **External participants are round-robin members**: they participate alongside AI participants, not as adjunct observers.
+- **Per-participant signalling**: buffered `ready chan struct{}` per external participant (capacity 1) absorbs race where the external sends before the engine reaches its wait select.
+- **Token-based auth**: UUID token stored as unexported `Participant.token`; not serialized in snapshots or logs.
+- **Single GET endpoint**: `GET /room/{room_id}/external?token=...&body=...` for ChatGPT Actions compatibility.
+- **Skill template**: returned on `connect` for `human+agent` type to guide the external AI assistant.
+- **Backward compatibility**: empty `Participant.Type` treated as `"ai"`; existing callers and tests unchanged.
+
+### Pull Request
+
+- **PR #10**: https://github.com/kirill-scherba/chat-machines/pull/10
+
+### Verification
+
+- `go build ./...` — ✅
+- `go vet ./...` — ✅
+- `go test ./...` — ✅
+- `go test -race ./...` — ✅
+
 ## Last Updated
 
+2026-07-09 — Issue #8 implemented by Master; PR #10 created and moved to In review.
 2026-07-08 — Issue #3 implemented by Master; PR created and moved to In review.
 2026-07-08 — Issue #5 planned, approved, moved to In progress, and PR #6 created.
 2026-07-08 — PR #6 review feedback addressed: context cancellation, safe rejoin, regression tests, docs sync.

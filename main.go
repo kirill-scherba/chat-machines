@@ -29,6 +29,8 @@ func main() {
 	// Configuration flags
 	opencodeURL := flag.String("opencode-url", "http://127.0.0.1:7709", "opencode-serve HTTP API URL")
 	httpAddr := flag.String("http", "", "MCP HTTP transport address (e.g. :8080); empty uses stdio")
+	externalAddr := flag.String("external-addr", "", "External HTTP endpoint address (e.g. :8081); empty disables ECC")
+	externalBaseURL := flag.String("external-base-url", "", "Base URL for external participant links (e.g. https://chat-machines.example.com)")
 	dbPath := flag.String("db", "", "SQLite database path for optional message logging")
 	memoryMCP := flag.String("memory-mcp", "http://127.0.0.1:7708/mcp", "memory-store-mcp URL for saving summaries")
 	autoSave := flag.Bool("auto-save", false, "automatically save digest to memory-store-mcp on chat stop")
@@ -42,7 +44,7 @@ func main() {
 	initLogging(*logDir)
 	defer ulog.Close()
 
-	log.Printf("%s %s starting (opencode=%s, http=%q)", appName, appVersion, *opencodeURL, *httpAddr)
+	log.Printf("%s %s starting (opencode=%s, http=%q, external=%q)", appName, appVersion, *opencodeURL, *httpAddr, *externalAddr)
 
 	// Create agent client
 	agentClient := NewAgentClient(*opencodeURL, *messageTimeout)
@@ -67,7 +69,19 @@ func main() {
 	engine.SetSummaryAutoSave(*autoSave)
 
 	// Create MCP server
-	mcpServer := NewMCPServer(engine)
+	mcpServer := NewMCPServer(engine, *externalBaseURL)
+
+	// Start external HTTP endpoint for non-opencode participants.
+	if *externalAddr != "" {
+		externalMux := http.NewServeMux()
+		externalMux.Handle("/room/", ExternalHandler(engine, *externalBaseURL))
+		go func() {
+			log.Printf("External HTTP server listening on %s", *externalAddr)
+			if err := http.ListenAndServe(*externalAddr, externalMux); err != nil && err != http.ErrServerClosed {
+				log.Printf("external http server error: %v", err)
+			}
+		}()
+	}
 
 	// Start transport
 	if *httpAddr != "" {
