@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -1193,8 +1194,8 @@ func TestRunRoundWaitsForExternalParticipant(t *testing.T) {
 	if baronMsgs == 0 {
 		t.Fatalf("expected Baron messages, got %v", final.Messages)
 	}
-	if lenaMsgs == 0 {
-		t.Fatalf("expected Lena messages, got %v", final.Messages)
+	if lenaMsgs != 1 {
+		t.Fatalf("expected exactly one Lena message (no duplication), got %d: %v", lenaMsgs, final.Messages)
 	}
 }
 
@@ -1285,19 +1286,18 @@ func TestMultipleExternalParticipants(t *testing.T) {
 		t.Fatalf("expected stopped, got %s", snap.Status)
 	}
 
-	xSeen, ySeen, aSeen := false, false, false
+	counts := map[string]int{}
 	for _, m := range snap.Messages {
-		switch m.From {
-		case "X":
-			xSeen = true
-		case "Y":
-			ySeen = true
-		case "A":
-			aSeen = true
-		}
+		counts[m.From]++
 	}
-	if !xSeen || !ySeen || !aSeen {
-		t.Fatalf("expected messages from A, X, and Y, got %v", snap.Messages)
+	if counts["A"] == 0 {
+		t.Fatalf("expected A message, got %v", snap.Messages)
+	}
+	if counts["X"] != 1 {
+		t.Fatalf("expected exactly one X message (no duplication), got %d: %v", counts["X"], snap.Messages)
+	}
+	if counts["Y"] != 1 {
+		t.Fatalf("expected exactly one Y message (no duplication), got %d: %v", counts["Y"], snap.Messages)
 	}
 }
 
@@ -1332,3 +1332,49 @@ func TestStartRoomSkipsExternalSessions(t *testing.T) {
 		t.Fatalf("expected 1 session creation (Baron only), got %d", calls)
 	}
 }
+// TestRunFinalReplySkipsExternalParticipants verifies that runFinalReply only
+// appends transcript entries for non-external AI participants and never creates
+// synthetic messages for external participants.
+func TestRunFinalReplySkipsExternalParticipants(t *testing.T) {
+	client := newMockAgentClient(map[string]string{
+		"ses_AI": "final reply from AI",
+	})
+	engine := NewChatEngine(client)
+	engine.SetRoundDelay(0)
+	defer engine.StopAll()
+
+	room := engine.store.CreateRoom("final reply skip", 2)
+	room.Status = RoomActive
+	room.CurrentRound = 1
+	room.Participants = []Participant{
+		{Name: "AI", Type: "ai", SessionID: "ses_AI"},
+		{Name: "Ext", Type: "external", Role: "participant", HumanType: "human"},
+	}
+	room.externalChannels = map[string]chan struct{}{}
+	room.externalResps = map[string]string{}
+	room.Messages = []Message{
+		{Round: 0, From: "AI", Text: "round 0 from AI"},
+		{Round: 0, From: "Ext", Text: "round 0 from Ext"},
+		{Round: 1, From: "Human", Text: "last question"},
+	}
+
+	ctx := context.Background()
+	if err := engine.runFinalReply(ctx, room, 1, room.Participants); err != nil {
+		t.Fatalf("runFinalReply: %v", err)
+	}
+
+	counts := map[string]int{}
+	for _, m := range room.Messages {
+		counts[m.From]++
+	}
+	if counts["AI"] != 2 {
+		t.Fatalf("expected two AI messages (round 0 + final reply), got %d: %v", counts["AI"], room.Messages)
+	}
+	if counts["Ext"] != 1 {
+		t.Fatalf("expected exactly one Ext message (round 0 only), got %d: %v", counts["Ext"], room.Messages)
+	}
+	if counts["Human"] != 1 {
+		t.Fatalf("expected exactly one Human message, got %d: %v", counts["Human"], room.Messages)
+	}
+}
+
