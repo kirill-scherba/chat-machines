@@ -64,7 +64,7 @@ Fix the round cycle so the human adjunct is a full participant: a round is compl
 ### Architecture Decisions
 
 - **Post-round increment**: `CurrentRound` is incremented after the adjunct has spoken (or timed out).
-- **Final reply round**: When `max_rounds` is reached and the last transcript message is from the human adjunct, the engine runs one additional AI response round (without incrementing the counter) so the final human message is answered before the room stops.
+- **Final reply round**: When `max_rounds` is reached and the last transcript message is a real human adjunct message (not the synthetic timeout marker), the engine runs one additional AI response round (without incrementing the counter) so the final human message is answered before the room stops.
 - **0-based internal numbering**: Messages are tagged with round numbers `0, 1, 2` for a 3-round chat. AI prompts still display `[Round 1/3]`, `[Round 2/3]`, etc. No API rename of `adjunct`.
 - **Max-rounds check after increment**: `CurrentRound >= MaxRounds` is checked after a round completes, not before it starts.
 

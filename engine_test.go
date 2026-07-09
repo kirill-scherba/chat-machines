@@ -682,13 +682,30 @@ func TestAdjunctTimeout(t *testing.T) {
 	}
 
 	foundTimeout := false
+	humanMsgCount := 0
+	aiMsgCount := 0
 	for _, m := range snap.Messages {
 		if m.Text == "(adjunct timeout)" {
 			foundTimeout = true
 		}
+		if m.From == "Kirill" && m.Text != "(adjunct timeout)" {
+			humanMsgCount++
+		}
+		if m.From == "A" {
+			aiMsgCount++
+		}
 	}
 	if !foundTimeout {
 		t.Fatalf("expected timeout marker, got: %v", snap.Messages)
+	}
+	if humanMsgCount != 0 {
+		t.Fatalf("expected no real human messages, got %d", humanMsgCount)
+	}
+	// Timeout markers must not be treated as a real human message, so no
+	// final reply round should run and the number of AI messages must equal
+	// the number of rounds.
+	if aiMsgCount != 2 {
+		t.Fatalf("expected 2 AI messages (one per round, no final reply after timeout), got %d", aiMsgCount)
 	}
 }
 

@@ -373,9 +373,11 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 	// Mark round as complete — everyone (AI + human) has now spoken.
 	completedRound := room.IncrementCurrentRound()
 
-	// If max rounds were reached and the last thing said was by the human
-	// adjunct, give the AI(s) a chance to reply to that final message before
-	// stopping. Without this, the human's last message would be lost (issue #7).
+	// If max rounds were reached and the last thing said was a real human
+	// adjunct message, give the AI(s) a chance to reply to that final message
+	// before stopping. Without this, the human's last message would be lost
+	// (issue #7). The synthetic timeout marker is ignored by
+	// lastMessageIsFromAdjunct.
 	if completedRound >= snap.MaxRounds && snap.AdjunctName != "" &&
 		lastMessageIsFromAdjunct(room, snap.AdjunctName) {
 		log.Printf("room %s: max rounds reached with pending human message, running final reply", room.ID)
@@ -407,7 +409,7 @@ func (e *ChatEngine) runFinalReply(ctx context.Context, room *Room, round int, p
 	log.Printf("room %s: final reply round %d/%d", room.ID, round+1, room.GetMaxRounds())
 
 	// Build transcript that includes the human's last message (round `round`)
-	// and all earlier messages, so the AI can reply in context.
+	// so the AI can reply in context.
 	transcript := buildTranscriptForRounds(room, round, participants, []int{round})
 
 	responses := make([]string, len(participants))
@@ -609,7 +611,8 @@ func buildTranscriptForRounds(room *Room, round int, participants []Participant,
 }
 
 // lastMessageIsFromAdjunct reports whether the most recent message in the room
-// transcript was sent by the human adjunct.
+// transcript was sent by the human adjunct, excluding the synthetic timeout
+// marker which is not a real human message.
 func lastMessageIsFromAdjunct(room *Room, adjunctName string) bool {
 	room.mu.RLock()
 	defer room.mu.RUnlock()
@@ -617,7 +620,7 @@ func lastMessageIsFromAdjunct(room *Room, adjunctName string) bool {
 		return false
 	}
 	last := room.Messages[len(room.Messages)-1]
-	return last.From == adjunctName
+	return last.From == adjunctName && last.Text != "(adjunct timeout)"
 }
 
 // ParticipantConfig is the user-provided configuration for a participant.
