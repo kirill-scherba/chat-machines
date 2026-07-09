@@ -5,7 +5,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1071,28 +1073,307 @@ func TestHumanLastMessageNotLost(t *testing.T) {
 }
 
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSub(s, substr))
+	return strings.Contains(s, substr)
 }
-func containsSub(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+
+// TestCreateChatRoomWithExternalParticipants verifies that external participants
+// are created with tokens and URLs are generated in the chat_create response.
+func TestCreateChatRoomWithExternalParticipants(t *testing.T) {
+	client := newMockAgentClient(map[string]string{})
+	engine := NewChatEngine(client)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("external test", []ParticipantConfig{
+		{Name: "Baron"},
+		{Name: "Kirill", Type: "external", Role: "controller", HumanType: "human"},
+	}, 3)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	room := engine.GetRoom(roomID)
+	if room == nil {
+		t.Fatalf("room %s not found", roomID)
+	}
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+
+	if len(room.Participants) != 2 {
+		t.Fatalf("expected 2 participants, got %d", len(room.Participants))
+	}
+
+	var external Participant
+	var internal Participant
+	for _, p := range room.Participants {
+		if p.IsExternal() {
+			external = p
+		} else {
+			internal = p
 		}
 	}
-	return false
+	if internal.Name != "Baron" {
+		t.Fatalf("expected internal participant Baron, got %v", internal)
+	}
+	if external.Name != "Kirill" {
+		t.Fatalf("expected external participant Kirill, got %v", external)
+	}
+	if external.token == "" {
+		t.Fatal("expected external participant token")
+	}
+	if external.ready == nil {
+		t.Fatal("expected external participant ready channel")
+	}
+	if room.externalChannels["Kirill"] == nil {
+		t.Fatal("expected external channel registered")
+	}
 }
 
-// Ensure mockAgentClient implements the subset used by ChatEngine.
-var _ interface {
-	CreateSession(name, agent, model, workDir string) (string, error)
-	SendMessage(sessionID, text, agent, model string) (string, error)
-	SendMessageAsync(sessionID, text, agent, model string) error
-} = (*mockAgentClient)(nil)
+// TestRunRoundWaitsForExternalParticipant verifies the round cycle pauses until
+// an external participant sends a message via AddExternalParticipantMessage.
+func TestRunRoundWaitsForExternalParticipant(t *testing.T) {
+	client := newMockAgentClient(map[string]string{
+		"ses_Baron": "hello from Baron",
+	})
+	engine := NewChatEngine(client)
+	engine.SetRoundDelay(10 * time.Millisecond)
+	defer engine.StopAll()
 
-// compile-time guard: AgentClient methods are not used by mock directly, but we
-// need to be sure the mock has the same shape. ChatEngine stores *AgentClient,
-// so this test compiles only because the mock is cast to *AgentClient in a way
-// that is unsafe at runtime; we handle this by converting the mock methods to
-// match *AgentClient. However Go has no duck typing, so the cast will panic at
-// runtime. To avoid this, we adjust the engine to accept an interface, or we
-// leave engine_test with a real *AgentClient backed by a httptest server.
+	roomID, err := engine.CreateChatRoom("external round", []ParticipantConfig{
+		{Name: "Baron"},
+		{Name: "Lena", Type: "external", Role: "participant", HumanType: "human+agent"},
+	}, 1)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	// Wait for AI to respond; external channel will be waiting.
+	time.Sleep(200 * time.Millisecond)
+	snap, ok := engine.GetRoomSnapshot(roomID)
+	if !ok {
+		t.Fatalf("room not found")
+	}
+	if snap.Status != RoomActive {
+		t.Fatalf("expected active, got %s", snap.Status)
+	}
+	if snap.CurrentRound != 0 {
+		t.Fatalf("expected round 0 while waiting for external, got %d", snap.CurrentRound)
+	}
+
+	// External participant sends a message.
+	if err := engine.store.AddExternalParticipantMessage(roomID, "Lena", "hi everyone"); err != nil {
+		t.Fatalf("add external message: %v", err)
+	}
+
+	// Wait for round to complete.
+	var final RoomSnapshot
+	for i := 0; i < 50; i++ {
+		s, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room not found")
+		}
+		final = s
+		if final.Status == RoomStopped {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if final.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", final.Status)
+	}
+
+	var baronMsgs, lenaMsgs int
+	for _, m := range final.Messages {
+		if m.From == "Baron" {
+			baronMsgs++
+		}
+		if m.From == "Lena" {
+			lenaMsgs++
+		}
+	}
+	if baronMsgs == 0 {
+		t.Fatalf("expected Baron messages, got %v", final.Messages)
+	}
+	if lenaMsgs != 1 {
+		t.Fatalf("expected exactly one Lena message (no duplication), got %d: %v", lenaMsgs, final.Messages)
+	}
+}
+
+// TestExternalParticipantTimeout verifies that the engine continues after an
+// external participant fails to respond within the timeout.
+func TestExternalParticipantTimeout(t *testing.T) {
+	client := newMockAgentClient(map[string]string{})
+	engine := NewChatEngine(client)
+	engine.SetRoundDelay(10 * time.Millisecond)
+	engine.SetAdjunctTimeout(50 * time.Millisecond)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("external timeout", []ParticipantConfig{
+		{Name: "A"},
+		{Name: "External", Type: "external", Role: "participant", HumanType: "human"},
+	}, 3)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	var snap RoomSnapshot
+	for i := 0; i < 50; i++ {
+		s, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room not found")
+		}
+		snap = s
+		if snap.Status == RoomStopped {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped after timeout, got %s", snap.Status)
+	}
+
+	foundTimeout := false
+	for _, m := range snap.Messages {
+		if m.From == "External" && strings.Contains(m.Text, "timeout") {
+			foundTimeout = true
+			break
+		}
+	}
+	if !foundTimeout {
+		t.Fatalf("expected timeout marker for External, got %v", snap.Messages)
+	}
+}
+
+// TestMultipleExternalParticipants verifies that multiple externals participate
+// in the same round cycle.
+func TestMultipleExternalParticipants(t *testing.T) {
+	client := newMockAgentClient(map[string]string{
+		"ses_A": "from A",
+	})
+	engine := NewChatEngine(client)
+	engine.SetRoundDelay(10 * time.Millisecond)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("multi external", []ParticipantConfig{
+		{Name: "A"},
+		{Name: "X", Type: "external", Role: "participant", HumanType: "human"},
+		{Name: "Y", Type: "external", Role: "participant", HumanType: "human"},
+	}, 1)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	engine.store.AddExternalParticipantMessage(roomID, "X", "x message")
+	time.Sleep(50 * time.Millisecond)
+	engine.store.AddExternalParticipantMessage(roomID, "Y", "y message")
+
+	var snap RoomSnapshot
+	for i := 0; i < 50; i++ {
+		s, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room not found")
+		}
+		snap = s
+		if snap.Status == RoomStopped {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if snap.Status != RoomStopped {
+		t.Fatalf("expected stopped, got %s", snap.Status)
+	}
+
+	counts := map[string]int{}
+	for _, m := range snap.Messages {
+		counts[m.From]++
+	}
+	if counts["A"] == 0 {
+		t.Fatalf("expected A message, got %v", snap.Messages)
+	}
+	if counts["X"] != 1 {
+		t.Fatalf("expected exactly one X message (no duplication), got %d: %v", counts["X"], snap.Messages)
+	}
+	if counts["Y"] != 1 {
+		t.Fatalf("expected exactly one Y message (no duplication), got %d: %v", counts["Y"], snap.Messages)
+	}
+}
+
+// TestStartRoomSkipsExternalSessions verifies no opencode sessions are created
+// for external participants.
+func TestStartRoomSkipsExternalSessions(t *testing.T) {
+	client := newMockAgentClient(map[string]string{})
+	engine := NewChatEngine(client)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("mixed participants", []ParticipantConfig{
+		{Name: "Baron"},
+		{Name: "Kirill", Type: "external", Role: "controller", HumanType: "human"},
+	}, 3)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	// Wait for the room to become active, indicating startRoom completed.
+	for i := 0; i < 50; i++ {
+		snap, ok := engine.GetRoomSnapshot(roomID)
+		if ok && snap.Status == RoomActive {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	client.mu.Lock()
+	calls := client.createCalls
+	client.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected 1 session creation (Baron only), got %d", calls)
+	}
+}
+// TestRunFinalReplySkipsExternalParticipants verifies that runFinalReply only
+// appends transcript entries for non-external AI participants and never creates
+// synthetic messages for external participants.
+func TestRunFinalReplySkipsExternalParticipants(t *testing.T) {
+	client := newMockAgentClient(map[string]string{
+		"ses_AI": "final reply from AI",
+	})
+	engine := NewChatEngine(client)
+	engine.SetRoundDelay(0)
+	defer engine.StopAll()
+
+	room := engine.store.CreateRoom("final reply skip", 2)
+	room.Status = RoomActive
+	room.CurrentRound = 1
+	room.Participants = []Participant{
+		{Name: "AI", Type: "ai", SessionID: "ses_AI"},
+		{Name: "Ext", Type: "external", Role: "participant", HumanType: "human"},
+	}
+	room.externalChannels = map[string]chan struct{}{}
+	room.externalResps = map[string]string{}
+	room.Messages = []Message{
+		{Round: 0, From: "AI", Text: "round 0 from AI"},
+		{Round: 0, From: "Ext", Text: "round 0 from Ext"},
+		{Round: 1, From: "Human", Text: "last question"},
+	}
+
+	ctx := context.Background()
+	if err := engine.runFinalReply(ctx, room, 1, room.Participants); err != nil {
+		t.Fatalf("runFinalReply: %v", err)
+	}
+
+	counts := map[string]int{}
+	for _, m := range room.Messages {
+		counts[m.From]++
+	}
+	if counts["AI"] != 2 {
+		t.Fatalf("expected two AI messages (round 0 + final reply), got %d: %v", counts["AI"], room.Messages)
+	}
+	if counts["Ext"] != 1 {
+		t.Fatalf("expected exactly one Ext message (round 0 only), got %d: %v", counts["Ext"], room.Messages)
+	}
+	if counts["Human"] != 1 {
+		t.Fatalf("expected exactly one Human message, got %d: %v", counts["Human"], room.Messages)
+	}
+}

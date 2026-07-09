@@ -43,12 +43,12 @@ Rules:
 `
 
 // NewMCPServer creates and registers all chat-machines MCP tools.
-func NewMCPServer(engine *ChatEngine) *server.MCPServer {
+func NewMCPServer(engine *ChatEngine, externalBaseURL string) *server.MCPServer {
 	s := server.NewMCPServer("chat-machines", "1.0.0",
 		server.WithInstructions(systemInstructions))
 
 	s.AddTools(
-		chatCreateTool(engine),
+		chatCreateTool(engine, externalBaseURL),
 		chatListTool(engine),
 		chatGetTool(engine),
 		chatSendTool(engine),
@@ -72,11 +72,11 @@ func resultError(err error) (*mcp.CallToolResult, error) {
 	return mcp.NewToolResultText(fmt.Sprintf(`{"error": %q}`, err.Error())), nil
 }
 
-func chatCreateTool(engine *ChatEngine) server.ServerTool {
+func chatCreateTool(engine *ChatEngine, externalBaseURL string) server.ServerTool {
 	t := mcp.NewTool("chat_create",
-		mcp.WithDescription("Create and start a multi-AI chat room."),
+		mcp.WithDescription("Create and start a multi-AI chat room. External participants connect via a generated URL and can be human or human+agent."),
 		mcp.WithArray("participants",
-			mcp.Description("List of participant objects with name, optional agent, and optional model"),
+			mcp.Description("List of participant objects with name, optional agent, model, type, role, and human_type"),
 			mcp.Required()),
 		mcp.WithString("topic",
 			mcp.Description("Topic of the chat"),
@@ -119,10 +119,31 @@ func chatCreateTool(engine *ChatEngine) server.ServerTool {
 					return resultError(fmt.Errorf("duplicate participant name %q", name))
 				}
 				seen[name] = true
+				typ := getString(m, "type")
+				if typ != "" && typ != "ai" && typ != "external" {
+					return resultError(fmt.Errorf("participant %q: type must be 'ai' or 'external'", name))
+				}
+				role := getString(m, "role")
+				if role != "" && role != "controller" && role != "participant" {
+					return resultError(fmt.Errorf("participant %q: role must be 'controller' or 'participant'", name))
+				}
+				humanType := getString(m, "human_type")
+				if humanType != "" && humanType != "human" && humanType != "human+agent" {
+					return resultError(fmt.Errorf("participant %q: human_type must be 'human' or 'human+agent'", name))
+				}
+				if typ == "external" && humanType == "" {
+					return resultError(fmt.Errorf("participant %q: external participants require human_type", name))
+				}
+				if typ == "external" && role == "" {
+					return resultError(fmt.Errorf("participant %q: external participants require role", name))
+				}
 				configs = append(configs, ParticipantConfig{
-					Name:  name,
-					Agent: getString(m, "agent"),
-					Model: getString(m, "model"),
+					Name:      name,
+					Agent:     getString(m, "agent"),
+					Model:     getString(m, "model"),
+					Type:      typ,
+					Role:      role,
+					HumanType: humanType,
 				})
 			}
 
@@ -136,14 +157,32 @@ func chatCreateTool(engine *ChatEngine) server.ServerTool {
 				return resultError(fmt.Errorf("room %s disappeared after creation", roomID))
 			}
 
-			log.Printf("mcp chat_create: room=%s participants=%d", snap.ID, len(configs))
-			return resultJSON(map[string]any{
+			externalURLs := make(map[string]string)
+			if externalBaseURL != "" {
+				room := engine.GetRoom(roomID)
+				if room != nil {
+					room.mu.RLock()
+					for _, p := range room.Participants {
+						if p.IsExternal() {
+							externalURLs[p.Name] = fmt.Sprintf("%s/room/%s/external?token=%s", externalBaseURL, roomID, p.token)
+						}
+					}
+					room.mu.RUnlock()
+				}
+			}
+
+			log.Printf("mcp chat_create: room=%s participants=%d externals=%d", snap.ID, len(configs), len(externalURLs))
+			resp := map[string]any{
 				"room_id":      snap.ID,
 				"topic":        snap.Topic,
 				"participants": configs,
 				"max_rounds":   snap.MaxRounds,
 				"status":       snap.Status,
-			})
+			}
+			if len(externalURLs) > 0 {
+				resp["external_urls"] = externalURLs
+			}
+			return resultJSON(resp)
 		},
 	}
 }

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Agent is the interface for creating sessions and sending/receiving messages.
@@ -81,14 +83,29 @@ func (e *ChatEngine) SetSummaryAutoSave(auto bool) {
 // CreateChatRoom creates and starts a chat room asynchronously.
 func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, maxRounds int) (string, error) {
 	room := e.store.CreateRoom(topic, maxRounds)
+	room.externalChannels = make(map[string]chan struct{})
+	room.externalResps = make(map[string]string)
+
 	for _, cfg := range configs {
 		p := Participant{
-			Name:  cfg.Name,
-			Agent: cfg.Agent,
-			Model: cfg.Model,
+			Name:      cfg.Name,
+			Agent:     cfg.Agent,
+			Model:     cfg.Model,
+			Type:      cfg.Type,
+			Role:      cfg.Role,
+			HumanType: cfg.HumanType,
+		}
+		// Backward compatibility: treat empty type as AI.
+		if p.Type == "" {
+			p.Type = "ai"
 		}
 		if p.Name == "" {
 			p.Name = fmt.Sprintf("agent-%d", len(room.Participants)+1)
+		}
+		if p.IsExternal() {
+			p.token = uuid.New().String()
+			p.ready = make(chan struct{}, 1)
+			room.externalChannels[p.Name] = p.ready
 		}
 		if err := e.store.AddParticipant(room.ID, p); err != nil {
 			return "", err
@@ -240,6 +257,10 @@ func (e *ChatEngine) startRoom(room *Room) error {
 	workDir := "/tmp"
 	sessionIDs := make([]string, len(snap.Participants))
 	for i, p := range snap.Participants {
+		if p.IsExternal() {
+			sessionIDs[i] = ""
+			continue
+		}
 		sid, err := e.agent.CreateSession(p.Name, p.Agent, p.Model, workDir)
 		if err != nil {
 			return fmt.Errorf("create session for %s: %w", p.Name, err)
@@ -249,6 +270,9 @@ func (e *ChatEngine) startRoom(room *Room) error {
 
 	onboarding := buildOnboarding(room.Topic, snap.Participants)
 	for i, p := range snap.Participants {
+		if p.IsExternal() {
+			continue
+		}
 		if _, err := e.agent.SendMessage(sessionIDs[i], onboarding, p.Agent, p.Model); err != nil {
 			return fmt.Errorf("onboarding %s: %w", p.Name, err)
 		}
@@ -287,6 +311,26 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 		wg.Add(1)
 		go func(idx int, part Participant) {
 			defer wg.Done()
+			if part.IsExternal() {
+				// Wait for external participant to send via HTTP endpoint.
+				timeout := e.adjunctTimeout
+				if timeout <= 0 {
+					timeout = 5 * time.Minute
+				}
+				select {
+				case <-part.ready:
+					resp, ok := e.store.GetExternalResponse(room.ID, part.Name)
+					if !ok || resp == "" {
+						resp = fmt.Sprintf("(timeout: %s)", part.Name)
+					}
+					responses[idx] = resp
+				case <-time.After(timeout):
+					responses[idx] = fmt.Sprintf("(timeout: %s)", part.Name)
+				case <-ctx.Done():
+					responses[idx] = fmt.Sprintf("(cancelled: %s)", part.Name)
+				}
+				return
+			}
 			text := transcript
 			if round == 0 {
 				// In round 1 we already sent onboarding; just ask for the first contribution.
@@ -412,12 +456,26 @@ func (e *ChatEngine) runFinalReply(ctx context.Context, room *Room, round int, p
 	// so the AI can reply in context.
 	transcript := buildTranscriptForRounds(room, round, participants, []int{round})
 
-	responses := make([]string, len(participants))
+	// Only non-external AI participants take part in the final reply round.
+	// External participants are ignored: they have no opencode session and must
+	// not receive synthetic transcript entries.
+	aiParticipants := make([]Participant, 0, len(participants))
+	for _, p := range participants {
+		if !p.IsExternal() {
+			aiParticipants = append(aiParticipants, p)
+		}
+	}
+	if len(aiParticipants) == 0 {
+		log.Printf("room %s: final reply round has no AI participants", room.ID)
+		return nil
+	}
+
+	responses := make([]string, len(aiParticipants))
 	var wg sync.WaitGroup
 	var errOnce sync.Once
 	var roundErr error
 
-	for i, p := range participants {
+	for i, p := range aiParticipants {
 		wg.Add(1)
 		go func(idx int, part Participant) {
 			defer wg.Done()
@@ -437,7 +495,7 @@ func (e *ChatEngine) runFinalReply(ctx context.Context, room *Room, round int, p
 	}
 
 	now := time.Now()
-	for i, p := range participants {
+	for i, p := range aiParticipants {
 		resp := strings.TrimSpace(responses[i])
 		msg := Message{
 			Round:     round,
@@ -524,7 +582,7 @@ func (e *ChatEngine) closeSessions(room *Room) {
 	copy(participants, room.Participants)
 	room.mu.RUnlock()
 	for _, p := range participants {
-		if p.SessionID == "" {
+		if p.IsExternal() || p.SessionID == "" {
 			continue
 		}
 		// There is no explicit close endpoint; sessions expire automatically.
@@ -547,7 +605,7 @@ func (e *ChatEngine) collectSummaries(room *Room) ([]Summary, error) {
 
 	var summaries []Summary
 	for _, p := range participants {
-		if p.SessionID == "" {
+		if p.IsExternal() || p.SessionID == "" {
 			continue
 		}
 		text, err := e.agent.SendMessage(p.SessionID, prompt, p.Agent, p.Model)
@@ -625,9 +683,12 @@ func lastMessageIsFromAdjunct(room *Room, adjunctName string) bool {
 
 // ParticipantConfig is the user-provided configuration for a participant.
 type ParticipantConfig struct {
-	Name  string `json:"name"`
-	Agent string `json:"agent,omitempty"`
-	Model string `json:"model,omitempty"`
+	Name      string `json:"name"`
+	Agent     string `json:"agent,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Type      string `json:"type,omitempty"`
+	Role      string `json:"role,omitempty"`
+	HumanType string `json:"human_type,omitempty"`
 }
 
 // Summary is a single participant's summary.

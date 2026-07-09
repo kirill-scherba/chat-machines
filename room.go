@@ -25,12 +25,20 @@ const (
 // consecutiveOKStop is the number of consecutive all-OK rounds that triggers auto-stop.
 const consecutiveOKStop = 2
 
-// Participant is a single chat member backed by an opencode-serve session.
+// Participant is a single chat member backed by an opencode-serve session
+// or an external HTTP-based participant.
 type Participant struct {
 	Name      string
 	Agent     string
 	Model     string
 	SessionID string
+	Type      string // "" or "ai" = opencode-serve participant; "external" = HTTP endpoint
+	Role      string // "controller" (can command) or "participant" (external only)
+	HumanType string // "human" or "human+agent" (external only)
+
+	// Internal fields, not serialized:
+	token string        // UUID for external endpoint authentication
+	ready chan struct{} // buffered (cap 1), signalled when external sends a message
 }
 
 // Message is a single round entry.
@@ -71,6 +79,14 @@ type Room struct {
 	// directly to memory-store-mcp.
 	StoredDigest *Digest
 
+	// externalResps holds the latest message text per external participant
+	// for the current round. Set by the HTTP handler, read and cleared by runRound.
+	externalResps map[string]string
+
+	// externalChannels mirrors Participant.ready for direct lookup by name
+	// in the HTTP handler (which has no snapshot reference to Participants).
+	externalChannels map[string]chan struct{}
+
 	mu sync.RWMutex
 }
 
@@ -89,6 +105,7 @@ type RoomSnapshot struct {
 	AdjunctSessionID string        `json:"adjunct_session_id,omitempty"`
 	AdjunctName      string        `json:"adjunct_name,omitempty"`
 	HasAdjunct       bool          `json:"has_adjunct"`
+	HasExternals     bool          `json:"has_externals"`
 	StoredDigest     *Digest       `json:"digest,omitempty"`
 }
 
@@ -106,6 +123,14 @@ func (r *Room) Snapshot() RoomSnapshot {
 		t := *r.StoppedAt
 		stopped = &t
 	}
+	var hasExternals bool
+	for _, p := range r.Participants {
+		if p.IsExternal() {
+			hasExternals = true
+			break
+		}
+	}
+
 	return RoomSnapshot{
 		ID:               r.ID,
 		Topic:            r.Topic,
@@ -120,6 +145,7 @@ func (r *Room) Snapshot() RoomSnapshot {
 		AdjunctSessionID: r.AdjunctSessionID,
 		AdjunctName:      r.AdjunctName,
 		HasAdjunct:       r.AdjunctName != "",
+		HasExternals:     hasExternals,
 		StoredDigest:     r.StoredDigest,
 	}
 }
@@ -325,6 +351,117 @@ func (s *RoomStore) SetDigest(roomID string, digest *Digest) error {
 	return nil
 }
 
+// AddExternalParticipantMessage stores a message from an external participant
+// and signals the participant's ready channel (non-blocking). The engine is the
+// sole writer of transcript entries for external participants: runRound reads
+// the stored text via GetExternalResponse and appends it to the transcript.
+func (s *RoomStore) AddExternalParticipantMessage(roomID, name, text string) error {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return fmt.Errorf("room %s not found", roomID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.Status == RoomStopped {
+		return fmt.Errorf("room %s is stopped", roomID)
+	}
+
+	var found bool
+	for _, p := range r.Participants {
+		if p.Name == name && p.IsExternal() {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("external participant %q not found in room %s", name, roomID)
+	}
+
+	if r.externalResps == nil {
+		r.externalResps = make(map[string]string)
+	}
+	if r.externalChannels == nil {
+		r.externalChannels = make(map[string]chan struct{})
+	}
+
+	// Store response text for runRound to collect and record in the transcript.
+	r.externalResps[name] = text
+
+	// Signal the engine goroutine that this external has spoken.
+	if ch, ok := r.externalChannels[name]; ok && ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default: // engine already got the signal for this round
+		}
+	}
+	return nil
+}
+
+// FindExternalParticipantByToken returns the external participant matching the token.
+func (s *RoomStore) FindExternalParticipantByToken(roomID, token string) (Participant, bool) {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return Participant{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.Participants {
+		if p.IsExternal() && p.token == token {
+			return p, true
+		}
+	}
+	return Participant{}, false
+}
+
+// GetExternalResponse returns and clears the latest response text for an external
+// participant, or ("", false) if none is pending.
+func (s *RoomStore) GetExternalResponse(roomID, name string) (string, bool) {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return "", false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.externalResps == nil {
+		return "", false
+	}
+	text, ok := r.externalResps[name]
+	if ok {
+		delete(r.externalResps, name)
+	}
+	return text, ok
+}
+
+// RegisterExternalChannel registers or replaces the ready channel for an external
+// participant. Called by the engine when creating/starting a room.
+func (s *RoomStore) RegisterExternalChannel(roomID, name string, ch chan struct{}) {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.externalChannels == nil {
+		r.externalChannels = make(map[string]chan struct{})
+	}
+	r.externalChannels[name] = ch
+}
+
+// GetExternalChannel returns the ready channel for an external participant.
+func (s *RoomStore) GetExternalChannel(roomID, name string) (chan struct{}, bool) {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return nil, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.externalChannels == nil {
+		return nil, false
+	}
+	ch, ok := r.externalChannels[name]
+	return ch, ok && ch != nil
+}
+
 // MessagesForRound returns all messages for a specific round.
 func (r *Room) MessagesForRound(round int) []Message {
 	r.mu.RLock()
@@ -405,6 +542,16 @@ func (r *Room) UpdateOKRounds(allOK bool) bool {
 		r.okRounds = 0
 	}
 	return r.okRounds >= consecutiveOKStop
+}
+
+// IsExternal reports whether this participant is an external HTTP-based participant.
+func (p Participant) IsExternal() bool {
+	return p.Type == "external"
+}
+
+// Token returns the external participant auth token, or empty for internal participants.
+func (p Participant) Token() string {
+	return p.token
 }
 
 // IsOKResponse reports whether a response is the OK skip marker.
