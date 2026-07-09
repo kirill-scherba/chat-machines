@@ -456,21 +456,29 @@ func (e *ChatEngine) runFinalReply(ctx context.Context, room *Room, round int, p
 	// so the AI can reply in context.
 	transcript := buildTranscriptForRounds(room, round, participants, []int{round})
 
-	responses := make([]string, len(participants))
+	// Only non-external AI participants take part in the final reply round.
+	// External participants are ignored: they have no opencode session and must
+	// not receive synthetic transcript entries.
+	aiParticipants := make([]Participant, 0, len(participants))
+	for _, p := range participants {
+		if !p.IsExternal() {
+			aiParticipants = append(aiParticipants, p)
+		}
+	}
+	if len(aiParticipants) == 0 {
+		log.Printf("room %s: final reply round has no AI participants", room.ID)
+		return nil
+	}
+
+	responses := make([]string, len(aiParticipants))
 	var wg sync.WaitGroup
 	var errOnce sync.Once
 	var roundErr error
 
-	for i, p := range participants {
+	for i, p := range aiParticipants {
 		wg.Add(1)
 		go func(idx int, part Participant) {
 			defer wg.Done()
-			if part.IsExternal() {
-				// External participants are ignored in final reply round
-				// (they have no opencode session to reply and may already be offline).
-				responses[idx] = "OK"
-				return
-			}
 			text := fmt.Sprintf("%s\n\nYour turn, %s. Write your response (or \"OK\" if nothing to say).", transcript, part.Name)
 			resp, err := e.agent.SendMessage(part.SessionID, text, part.Agent, part.Model)
 			if err != nil {
@@ -487,7 +495,7 @@ func (e *ChatEngine) runFinalReply(ctx context.Context, room *Room, round int, p
 	}
 
 	now := time.Now()
-	for i, p := range participants {
+	for i, p := range aiParticipants {
 		resp := strings.TrimSpace(responses[i])
 		msg := Message{
 			Round:     round,

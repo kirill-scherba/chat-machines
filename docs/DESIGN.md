@@ -258,12 +258,15 @@ The `body` parameter decodes to `{ "action": "connect" | "send", "message": "...
 `agent.SendMessage`; external participants wait on their `ready` channel with the
 configured timeout. When the external endpoint receives a message it:
 
-1. Appends the message to the transcript with the current round number.
+1. Validates the token and decodes the action body.
 2. Stores the text in `externalResps`.
 3. Signals the `ready` channel.
 
-The engine goroutine reads the response and applies the OK protocol just like an
-AI response.
+`runRound` is the sole writer of external participant transcript entries. It reads
+the queued text via `GetExternalResponse`, appends the message with the current
+round number, and applies the OK protocol just like an AI response. External
+participants are skipped entirely in the final reply round; they receive no
+synthetic transcript entries.
 
 ### 8.4 Backward Compatibility
 

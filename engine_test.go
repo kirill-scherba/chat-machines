@@ -1332,5 +1332,3 @@ func TestStartRoomSkipsExternalSessions(t *testing.T) {
 		t.Fatalf("expected 1 session creation (Baron only), got %d", calls)
 	}
 }
-
-
