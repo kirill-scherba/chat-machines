@@ -454,7 +454,7 @@ func TestOKProtocolMixedResponses(t *testing.T) {
 
 	foundA := false
 	for _, m := range snap.Messages {
-		if m.From == "A" && m.Round == 1 {
+		if m.From == "A" && m.Round == 0 {
 			foundA = true
 		}
 	}
@@ -594,7 +594,7 @@ func TestAdjunctWaitBlocks(t *testing.T) {
 		}
 		snap = s
 		for _, m := range snap.Messages {
-			if m.From == "A" && m.Round == 1 {
+			if m.From == "A" && m.Round == 0 {
 				foundAI = true
 				break
 			}
@@ -710,17 +710,20 @@ func TestAdjunctMultipleRounds(t *testing.T) {
 		t.Fatalf("join adjunct: %v", err)
 	}
 
-	// Goroutine sends a human message whenever a new round starts and is waiting.
+	// Goroutine sends a human message after the AI responds in each round.
 	go func() {
-		lastRound := 0
+		sentRounds := make(map[int]bool)
 		for {
 			snap, ok := engine.GetRoomSnapshot(roomID)
 			if !ok || snap.Status == RoomStopped {
 				return
 			}
-			if snap.CurrentRound > lastRound && snap.Status == RoomActive {
-				lastRound = snap.CurrentRound
-				engine.AddExternalMessage(roomID, "Kirill", fmt.Sprintf("msg round %d", snap.CurrentRound))
+			for _, m := range snap.Messages {
+				if m.From != "Kirill" && !sentRounds[m.Round] {
+					sentRounds[m.Round] = true
+					engine.AddExternalMessage(roomID, "Kirill", fmt.Sprintf("msg round %d", m.Round))
+					break
+				}
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -750,10 +753,10 @@ func TestAdjunctMultipleRounds(t *testing.T) {
 	foundRound1 := false
 	foundRound2 := false
 	for _, m := range snap.Messages {
-		if m.From == "Kirill" && m.Text == "msg round 1" && m.Round == 1 {
+		if m.From == "Kirill" && m.Text == "msg round 0" && m.Round == 0 {
 			foundRound1 = true
 		}
-		if m.From == "Kirill" && m.Text == "msg round 2" && m.Round == 2 {
+		if m.From == "Kirill" && m.Text == "msg round 1" && m.Round == 1 {
 			foundRound2 = true
 		}
 	}
@@ -791,7 +794,7 @@ func TestAdjunctLeaveUnblocks(t *testing.T) {
 		}
 		snap = s
 		for _, m := range snap.Messages {
-			if m.From == "A" && m.Round == 1 {
+			if m.From == "A" && m.Round == 0 {
 				foundAI = true
 				break
 			}
@@ -855,7 +858,7 @@ func TestStopRoomWhileAdjunctWaiting(t *testing.T) {
 			t.Fatalf("room %s not found", roomID)
 		}
 		for _, m := range snap.Messages {
-			if m.From == "A" && m.Round == 1 {
+			if m.From == "A" && m.Round == 0 {
 				foundAI = true
 				break
 			}
@@ -911,7 +914,7 @@ func TestAdjunctRejoinUnblocksWaiter(t *testing.T) {
 			t.Fatalf("room %s not found", roomID)
 		}
 		for _, m := range snap.Messages {
-			if m.From == "A" && m.Round == 1 {
+			if m.From == "A" && m.Round == 0 {
 				foundAI = true
 				break
 			}
@@ -961,6 +964,81 @@ func TestAdjunctRejoinUnblocksWaiter(t *testing.T) {
 	}
 	if !foundBaron {
 		t.Fatalf("expected message from rejoined adjunct Baron, got: %v", snap.Messages)
+	}
+}
+
+func TestHumanLastMessageNotLost(t *testing.T) {
+	// Reproduces issue #7: max_rounds=3, human sends message in every round.
+	// AI MUST reply to the human's round-3 message before the room stops.
+	responses := map[string]string{"ses_A": "hello from AI"}
+	client := newMockAgentClient(responses)
+	engine := NewChatEngine(client)
+	engine.SetRoundDelay(10 * time.Millisecond)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("human last msg", []ParticipantConfig{
+		{Name: "A"},
+	}, 3)
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+	if err := engine.SetAdjunct(roomID, "ses_Kirill", "Kirill"); err != nil {
+		t.Fatalf("join adjunct: %v", err)
+	}
+
+	// Respond to every AI message to ensure all rounds complete.
+	go func() {
+		sent := make(map[int]bool)
+		for {
+			snap, ok := engine.GetRoomSnapshot(roomID)
+			if !ok || snap.Status == RoomStopped {
+				return
+			}
+			for _, m := range snap.Messages {
+				if m.From == "A" && !sent[m.Round] {
+					sent[m.Round] = true
+					engine.AddExternalMessage(roomID, "Kirill", fmt.Sprintf("reply r%d", m.Round))
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	// Wait for stop.
+	var snap RoomSnapshot
+	for i := 0; i < 200; i++ {
+		s, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatal("room gone")
+		}
+		snap = s
+		if snap.Status == RoomStopped {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if snap.Status != RoomStopped {
+		t.Fatal("expected stopped")
+	}
+	if snap.CurrentRound != 3 {
+		t.Fatalf("expected 3 rounds, got %d", snap.CurrentRound)
+	}
+
+	// Verify: 3 AI messages + 3 human messages = 6 messages total.
+	ai, human := 0, 0
+	for _, m := range snap.Messages {
+		if m.From == "A" {
+			ai++
+		}
+		if m.From == "Kirill" {
+			human++
+		}
+	}
+	if ai != 3 {
+		t.Fatalf("expected 3 AI msgs, got %d: %v", ai, snap.Messages)
+	}
+	if human != 3 {
+		t.Fatalf("expected 3 human msgs, got %d: %v", human, snap.Messages)
 	}
 }
 

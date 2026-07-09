@@ -213,12 +213,6 @@ func (e *ChatEngine) run(ctx context.Context, room *Room, done chan struct{}) {
 		default:
 		}
 
-		if room.GetCurrentRound() >= room.GetMaxRounds() {
-			log.Printf("room %s: reached max rounds", room.ID)
-			e.finishRoom(room, nil)
-			return
-		}
-
 		done, err := e.runRound(ctx, room)
 		if err != nil {
 			log.Printf("room %s: round error: %v", room.ID, err)
@@ -226,7 +220,12 @@ func (e *ChatEngine) run(ctx context.Context, room *Room, done chan struct{}) {
 			return
 		}
 		if done {
-			log.Printf("room %s: all participants OK, stopping", room.ID)
+			log.Printf("room %s: stopping (%d rounds completed)", room.ID, room.GetCurrentRound())
+			e.finishRoom(room, nil)
+			return
+		}
+		if room.GetCurrentRound() >= room.GetMaxRounds() {
+			log.Printf("room %s: reached max rounds", room.ID)
 			e.finishRoom(room, nil)
 			return
 		}
@@ -267,13 +266,14 @@ func (e *ChatEngine) startRoom(room *Room) error {
 	return nil
 }
 
-// runRound executes a single round. Returns true if the chat should stop due to all-OK.
+// runRound executes a single round. Returns true if the chat should stop due
+// to all-OK or max rounds being reached.
 func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
-	round := room.IncrementCurrentRound()
 	snap := room.Snapshot()
+	round := snap.CurrentRound // 0-based internal round number
 	participants := snap.Participants
 
-	log.Printf("room %s: round %d/%d", room.ID, round, snap.MaxRounds)
+	log.Printf("room %s: round %d/%d", room.ID, round+1, snap.MaxRounds)
 
 	// Build transcript from previous round messages (empty on round 1).
 	transcript := buildTranscript(room, round, participants)
@@ -288,7 +288,7 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 		go func(idx int, part Participant) {
 			defer wg.Done()
 			text := transcript
-			if round == 1 {
+			if round == 0 {
 				// In round 1 we already sent onboarding; just ask for the first contribution.
 				text = fmt.Sprintf("%s\n\nYour turn, %s. Write your first message.", buildHeader(room.Topic, participants), part.Name)
 			} else {
@@ -306,7 +306,7 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 	wg.Wait()
 	if roundErr != nil {
 		// Save timeout markers but continue.
-		log.Printf("room %s: round %d had participant error(s): %v", room.ID, round, roundErr)
+		log.Printf("room %s: round %d had participant error(s): %v", room.ID, round+1, roundErr)
 	}
 
 	allOK := true
@@ -346,11 +346,11 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 			case _, ok := <-ch:
 				if !ok {
 					// Adjunct left while we were waiting.
-					log.Printf("room %s: round %d adjunct left while waiting", room.ID, round)
+					log.Printf("room %s: round %d adjunct left while waiting", room.ID, round+1)
 				}
 			case <-time.After(timeout):
 				timeoutMsg := "(adjunct timeout)"
-				log.Printf("room %s: round %d adjunct timeout", room.ID, round)
+				log.Printf("room %s: round %d adjunct timeout", room.ID, round+1)
 				if err := e.store.AddMessage(room.ID, Message{
 					Round:     round,
 					From:      snap.AdjunctName,
@@ -364,10 +364,18 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 				}
 			case <-ctx.Done():
 				// Room was stopped while waiting for the adjunct.
-				log.Printf("room %s: round %d adjunct wait cancelled", room.ID, round)
+				log.Printf("room %s: round %d adjunct wait cancelled", room.ID, round+1)
 				return false, ctx.Err()
 			}
 		}
+	}
+
+	// Mark round as complete — everyone (AI + human) has now spoken.
+	completedRound := room.IncrementCurrentRound()
+	if completedRound >= snap.MaxRounds {
+		log.Printf("room %s: round %d complete, max rounds (%d) reached",
+			room.ID, completedRound, snap.MaxRounds)
+		return true, nil
 	}
 
 	stop := room.UpdateOKRounds(allOK)
@@ -509,7 +517,7 @@ func buildHeader(topic string, participants []Participant) string {
 func buildTranscript(room *Room, round int, participants []Participant) string {
 	var sb strings.Builder
 	sb.WriteString(buildHeader(room.Topic, participants))
-	sb.WriteString(fmt.Sprintf("\n\n[Round %d/%d]\n", round, room.MaxRounds))
+	sb.WriteString(fmt.Sprintf("\n\n[Round %d/%d]\n", round+1, room.MaxRounds))
 	messages := room.MessagesForRound(round - 1)
 	if len(messages) == 0 {
 		sb.WriteString("(no previous messages)\n")
