@@ -179,6 +179,61 @@ func TestExternalHandlerSendRequiresMessage(t *testing.T) {
 	}
 }
 
+func TestExternalHandlerSince(t *testing.T) {
+	engine, roomID, token, baseURL := newExternalTestEngine()
+	defer engine.StopAll()
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Get total message count before test.
+	snap, _ := engine.GetRoomSnapshot(roomID)
+	totalBefore := len(snap.Messages)
+
+	handler := ExternalHandler(engine, baseURL)
+	bodySince0 := fmt.Sprintf(`{"action":"get","since":0}`)
+	bodySinceLarge := fmt.Sprintf(`{"action":"get","since":%d}`, totalBefore+1)
+
+	for _, tc := range []struct {
+		name           string
+		body           string
+		wantMsgs       int
+		wantNextSince  int
+	}{
+		{"since=0 returns all", bodySince0, totalBefore, totalBefore},
+		{"since=total+1 returns empty", bodySinceLarge, 0, totalBefore},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			url := fmt.Sprintf("%s/room/%s/external?token=%s&body=%s", baseURL, roomID, token, url.QueryEscape(tc.body))
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+			}
+
+			var resp ExternalEndpointResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+
+			if resp.NextSince != tc.wantNextSince {
+				t.Fatalf("next_since: want %d, got %d", tc.wantNextSince, resp.NextSince)
+			}
+			if len(resp.Room.Messages) != tc.wantMsgs {
+				t.Fatalf("room.messages len: want %d, got %d", tc.wantMsgs, len(resp.Room.Messages))
+			}
+			totalRounds := 0
+			for _, g := range resp.Rounds {
+				totalRounds += len(g.Messages)
+			}
+			if totalRounds != tc.wantMsgs {
+				t.Fatalf("rounds total: want %d, got %d", tc.wantMsgs, totalRounds)
+			}
+		})
+	}
+}
+
 func TestBuildRoundGroups(t *testing.T) {
 	msgs := []Message{
 		{Round: 0, From: "A", Text: "a"},

@@ -228,7 +228,10 @@ func chatSendTool(engine *ChatEngine) server.ServerTool {
 	t := mcp.NewTool("chat_send",
 		mcp.WithDescription("Send a message from a human into a chat room."),
 		mcp.WithString("room_id", mcp.Description("Room ID"), mcp.Required()),
-		mcp.WithString("message", mcp.Description("Message text"), mcp.Required()))
+		mcp.WithString("message", mcp.Description("Message text"), mcp.Required()),
+		mcp.WithNumber("since",
+			mcp.Description("Optional: message index for delta. If provided, only new messages since this index are returned.")),
+	)
 	return server.ServerTool{
 		Tool: t,
 		Handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -241,21 +244,58 @@ func chatSendTool(engine *ChatEngine) server.ServerTool {
 			if message == "" {
 				return resultError(fmt.Errorf("message is required"))
 			}
+			since := 0
+			if v, ok := args["since"].(float64); ok {
+				since = int(v)
+			}
+
 			const fromHuman = "Kirill"
+
+			// Capture state before send so we can return delta afterwards.
+			snapBefore, ok := engine.GetRoomSnapshot(roomID)
+			if !ok {
+				return resultError(fmt.Errorf("room %s not found", roomID))
+			}
+			roundBefore := snapBefore.CurrentRound
+			msgCount := len(snapBefore.Messages)
+
 			if err := engine.AddExternalMessage(roomID, fromHuman, message); err != nil {
 				return resultError(err)
 			}
-			snap, ok := engine.GetRoomSnapshot(roomID)
+
+			// Wait for the round to advance — AI participants respond to the
+			// human's message. Timeout prevents blocking the MCP call forever.
+			// The MCP client has a 30s global timeout, so we use 25s to leave
+			// headroom for the MCP framework.
+			engine.WaitForRoundAdvance(roomID, roundBefore, fromHuman, 25*time.Second)
+
+			snapAfter, ok := engine.GetRoomSnapshot(roomID)
 			if !ok {
-				return resultError(fmt.Errorf("room %s not found after send", roomID))
+				return resultError(fmt.Errorf("room %s disappeared", roomID))
 			}
-			return resultJSON(map[string]any{
-				"room_id": roomID,
-				"from":    fromHuman,
-				"text":    message,
-				"round":   snap.CurrentRound,
-				"status":  snap.Status,
-			})
+
+			// Build response with delta messages.
+			resp := map[string]any{
+				"room_id":    roomID,
+				"sent":       true,
+				"from":       fromHuman,
+				"text":       message,
+				"round":      snapAfter.CurrentRound,
+				"status":     snapAfter.Status,
+				"next_since": len(snapAfter.Messages),
+			}
+
+			// Include delta messages based on since parameter or message count.
+			totalAfter := len(snapAfter.Messages)
+			from := since
+			if from <= 0 {
+				from = msgCount
+			}
+			if from < totalAfter {
+				resp["messages"] = snapAfter.Messages[from:]
+			}
+
+			return resultJSON(resp)
 		},
 	}
 }

@@ -16,10 +16,11 @@ import (
 
 // ExternalEndpointResponse is the JSON body returned to external chat callers.
 type ExternalEndpointResponse struct {
-	Room   RoomSnapshot `json:"room"`
-	Rounds []RoundGroup `json:"rounds"`
-	Prompt string       `json:"prompt"`
-	Skill  string       `json:"skill,omitempty"`
+	Room      RoomSnapshot `json:"room"`
+	Rounds    []RoundGroup `json:"rounds"`
+	Prompt    string       `json:"prompt"`
+	Skill     string       `json:"skill,omitempty"`
+	NextSince int          `json:"next_since"`
 }
 
 // RoundGroup groups messages by round for the external endpoint response.
@@ -32,6 +33,7 @@ type RoundGroup struct {
 type externalActionBody struct {
 	Action  string `json:"action"`
 	Message string `json:"message,omitempty"`
+	Since   int    `json:"since,omitempty"`
 }
 
 // externalAgentSkill is returned on connect for human+agent participants.
@@ -47,6 +49,8 @@ Rules:
 - Be concise — other participants are waiting.
 
 The chat-machines server sends you the current room state on every request.
+The response includes "next_since" — pass it as "since" in your next
+"get" request to receive only new messages (delta). This keeps responses small.
 Use action "send" with the message text to post {name}'s response.`
 
 // ExternalHandler returns an http.Handler that serves the external chat endpoint.
@@ -91,15 +95,16 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 
 		switch body.Action {
 		case "connect", "get":
-			renderExternalResponse(w, engine, roomID, p, baseURL)
+			renderExternalResponse(w, engine, roomID, p, baseURL, body.Since)
 		case "send":
 			if strings.TrimSpace(body.Message) == "" {
 				http.Error(w, `{"error":"message is required for action=send"}`, http.StatusBadRequest)
 				return
 			}
-			// Capture current round before the message triggers the engine.
+			// Capture current round and message count before the send.
 			snapBefore, _ := engine.GetRoomSnapshot(roomID)
 			roundBefore := snapBefore.CurrentRound
+			since := len(snapBefore.Messages)
 
 			if err := engine.store.AddExternalParticipantMessage(roomID, p.Name, body.Message); err != nil {
 				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusConflict)
@@ -107,9 +112,9 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 			}
 
 			// Wait up to 30 seconds for the engine to finish the round (AI replies).
-			awaitRoundAdvance(engine, roomID, roundBefore, 30*time.Second)
+			engine.WaitForRoundAdvance(roomID, roundBefore, p.Name, 30*time.Second)
 
-			renderExternalResponse(w, engine, roomID, p, baseURL)
+			renderExternalResponse(w, engine, roomID, p, baseURL, since)
 		default:
 			http.Error(w, `{"error":"unknown action"}`, http.StatusBadRequest)
 		}
@@ -126,37 +131,35 @@ func extractRoomID(path string) (string, bool) {
 	return parts[1], true
 }
 
-// awaitRoundAdvance polls the room until the current round advances (meaning the
-// AI and all participants have responded) or the timeout expires.
-func awaitRoundAdvance(engine *ChatEngine, roomID string, roundBefore int, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		snap, ok := engine.GetRoomSnapshot(roomID)
-		if !ok || snap.Status != RoomActive {
-			return
-		}
-		if snap.CurrentRound > roundBefore {
-			return
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-}
-
 // renderExternalResponse builds and writes the ExternalEndpointResponse.
-func renderExternalResponse(w http.ResponseWriter, engine *ChatEngine, roomID string, p Participant, baseURL string) {
+// If since > 0, only messages from that index onward are included in the response.
+func renderExternalResponse(w http.ResponseWriter, engine *ChatEngine, roomID string, p Participant, baseURL string, since int) {
 	snap, ok := engine.GetRoomSnapshot(roomID)
 	if !ok {
 		http.Error(w, `{"error":"room not found"}`, http.StatusNotFound)
 		return
 	}
 
+	messages := snap.Messages
+	totalMessages := len(messages)
+	if since > 0 {
+		if since < totalMessages {
+			// Return only new messages to keep responses small.
+			snap.Messages = messages[since:]
+		} else {
+			// since >= totalMessages: return empty.
+			snap.Messages = nil
+		}
+	}
+
 	groups := buildRoundGroups(snap.Messages)
 	prompt := buildExternalPrompt(snap, p.Name)
 
 	resp := ExternalEndpointResponse{
-		Room:   snap,
-		Rounds: groups,
-		Prompt: prompt,
+		Room:      snap,
+		Rounds:    groups,
+		Prompt:    prompt,
+		NextSince: totalMessages,
 	}
 	if p.HumanType == "human+agent" {
 		resp.Skill = strings.ReplaceAll(externalAgentSkill, "{name}", p.Name)

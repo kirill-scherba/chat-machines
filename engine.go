@@ -135,6 +135,29 @@ func (e *ChatEngine) GetRoomSnapshot(id string) (RoomSnapshot, bool) {
 	return e.store.GetSnapshot(id)
 }
 
+// WaitForRoundAdvance polls the room until the round has advanced AND a message
+// from a participant other than senderName appears in the new round.
+// Used by MCP chat_send and ECC so the sender receives the AI response,
+// not just a confirmation that their message was accepted.
+func (e *ChatEngine) WaitForRoundAdvance(roomID string, roundBefore int, senderName string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		snap, ok := e.GetRoomSnapshot(roomID)
+		if !ok || snap.Status != RoomActive {
+			return
+		}
+		if snap.CurrentRound > roundBefore {
+			// Round advanced — now wait for a non-sender message in the new round.
+			for _, m := range snap.Messages {
+				if m.Round == roundBefore+1 && m.From != senderName {
+					return
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // AddExternalMessage injects a message from an external source (e.g. human) into
 // the room transcript without assigning a turn in the round-robin loop.
 func (e *ChatEngine) AddExternalMessage(roomID, from, text string) error {
