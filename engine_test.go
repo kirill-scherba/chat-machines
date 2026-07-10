@@ -116,6 +116,9 @@ func (m *roundAwareMockAgent) GetLastResponse(sessionID string) (string, bool, e
 }
 
 func (m *roundAwareMockAgent) SendMessageAsync(sessionID, text, agent, model string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.seen[sessionID] = true // mark session so the first real SendMessage is not treated as onboarding
 	return nil
 }
 

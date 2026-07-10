@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ExternalEndpointResponse is the JSON body returned to external chat callers.
@@ -89,17 +90,25 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 		log.Printf("external: room=%s participant=%s action=%s", roomID, p.Name, body.Action)
 
 		switch body.Action {
-		case "connect":
+		case "connect", "get":
 			renderExternalResponse(w, engine, roomID, p, baseURL)
 		case "send":
 			if strings.TrimSpace(body.Message) == "" {
 				http.Error(w, `{"error":"message is required for action=send"}`, http.StatusBadRequest)
 				return
 			}
+			// Capture current round before the message triggers the engine.
+			snapBefore, _ := engine.GetRoomSnapshot(roomID)
+			roundBefore := snapBefore.CurrentRound
+
 			if err := engine.store.AddExternalParticipantMessage(roomID, p.Name, body.Message); err != nil {
 				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusConflict)
 				return
 			}
+
+			// Wait up to 30 seconds for the engine to finish the round (AI replies).
+			awaitRoundAdvance(engine, roomID, roundBefore, 30*time.Second)
+
 			renderExternalResponse(w, engine, roomID, p, baseURL)
 		default:
 			http.Error(w, `{"error":"unknown action"}`, http.StatusBadRequest)
@@ -115,6 +124,22 @@ func extractRoomID(path string) (string, bool) {
 		return "", false
 	}
 	return parts[1], true
+}
+
+// awaitRoundAdvance polls the room until the current round advances (meaning the
+// AI and all participants have responded) or the timeout expires.
+func awaitRoundAdvance(engine *ChatEngine, roomID string, roundBefore int, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		snap, ok := engine.GetRoomSnapshot(roomID)
+		if !ok || snap.Status != RoomActive {
+			return
+		}
+		if snap.CurrentRound > roundBefore {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // renderExternalResponse builds and writes the ExternalEndpointResponse.

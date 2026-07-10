@@ -11,6 +11,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -273,7 +274,9 @@ func (e *ChatEngine) startRoom(room *Room) error {
 		if p.IsExternal() {
 			continue
 		}
-		if _, err := e.agent.SendMessage(sessionIDs[i], onboarding, p.Agent, p.Model); err != nil {
+		// Send onboarding asynchronously — we don't need the response,
+		// it's just context for the session. Saves 5-9s per room start.
+		if err := e.agent.SendMessageAsync(sessionIDs[i], onboarding, p.Agent, p.Model); err != nil {
 			return fmt.Errorf("onboarding %s: %w", p.Name, err)
 		}
 	}
@@ -302,15 +305,16 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 	// Build transcript from previous round messages (empty on round 1).
 	transcript := buildTranscript(room, round, participants)
 
-	responses := make([]string, len(participants))
 	var wg sync.WaitGroup
 	var errOnce sync.Once
 	var roundErr error
+	var nonOK atomic.Int32
 
 	for i, p := range participants {
 		wg.Add(1)
 		go func(idx int, part Participant) {
 			defer wg.Done()
+			var resp string
 			if part.IsExternal() {
 				// Wait for external participant to send via HTTP endpoint.
 				timeout := e.adjunctTimeout
@@ -319,31 +323,47 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 				}
 				select {
 				case <-part.ready:
-					resp, ok := e.store.GetExternalResponse(room.ID, part.Name)
+					var ok bool
+					resp, ok = e.store.GetExternalResponse(room.ID, part.Name)
 					if !ok || resp == "" {
 						resp = fmt.Sprintf("(timeout: %s)", part.Name)
 					}
-					responses[idx] = resp
 				case <-time.After(timeout):
-					responses[idx] = fmt.Sprintf("(timeout: %s)", part.Name)
+					resp = fmt.Sprintf("(timeout: %s)", part.Name)
 				case <-ctx.Done():
-					responses[idx] = fmt.Sprintf("(cancelled: %s)", part.Name)
+					resp = fmt.Sprintf("(cancelled: %s)", part.Name)
 				}
-				return
-			}
-			text := transcript
-			if round == 0 {
-				// In round 1 we already sent onboarding; just ask for the first contribution.
-				text = fmt.Sprintf("%s\n\nYour turn, %s. Write your first message.", buildHeader(room.Topic, participants), part.Name)
 			} else {
-				text = fmt.Sprintf("%s\n\nYour turn, %s. Write your response (or \"OK\" if nothing to say).", transcript, part.Name)
+				text := transcript
+				if round == 0 {
+					// In round 1 we already sent onboarding; just ask for the first contribution.
+					text = fmt.Sprintf("%s\n\nYour turn, %s. Write your first message.", buildHeader(room.Topic, participants), part.Name)
+				} else {
+					text = fmt.Sprintf("%s\n\nYour turn, %s. Write your response (or \"OK\" if nothing to say).", transcript, part.Name)
+				}
+				var err error
+				resp, err = e.agent.SendMessage(part.SessionID, text, part.Agent, part.Model)
+				if err != nil {
+					errOnce.Do(func() { roundErr = fmt.Errorf("%s: %w", part.Name, err) })
+					resp = fmt.Sprintf("(timeout: %s)", err)
+				}
 			}
-			resp, err := e.agent.SendMessage(part.SessionID, text, part.Agent, part.Model)
-			if err != nil {
-				errOnce.Do(func() { roundErr = fmt.Errorf("%s: %w", part.Name, err) })
-				resp = fmt.Sprintf("(timeout: %s)", err)
+			resp = strings.TrimSpace(resp)
+			msg := Message{
+				Round:     round,
+				From:      part.Name,
+				Text:      resp,
+				Timestamp: time.Now(),
 			}
-			responses[idx] = resp
+			if err := e.store.AddMessage(room.ID, msg); err != nil {
+				log.Printf("room %s: add message error: %v", room.ID, err)
+			}
+			if e.logger != nil {
+				_ = e.logger.LogMessage(room.ID, round, part.Name, resp, time.Now())
+			}
+			if !IsOKResponse(resp) {
+				nonOK.Add(1)
+			}
 		}(i, p)
 	}
 
@@ -353,26 +373,7 @@ func (e *ChatEngine) runRound(ctx context.Context, room *Room) (bool, error) {
 		log.Printf("room %s: round %d had participant error(s): %v", room.ID, round+1, roundErr)
 	}
 
-	allOK := true
-	now := time.Now()
-	for i, p := range participants {
-		resp := strings.TrimSpace(responses[i])
-		msg := Message{
-			Round:     round,
-			From:      p.Name,
-			Text:      resp,
-			Timestamp: now,
-		}
-		if err := e.store.AddMessage(room.ID, msg); err != nil {
-			return false, err
-		}
-		if e.logger != nil {
-			_ = e.logger.LogMessage(room.ID, round, p.Name, resp, now)
-		}
-		if !IsOKResponse(resp) {
-			allOK = false
-		}
-	}
+	allOK := nonOK.Load() == 0
 
 	// If a human adjunct is joined, wait for them to respond before
 	// finishing the round. The human message is injected via chat_send
@@ -470,14 +471,13 @@ func (e *ChatEngine) runFinalReply(ctx context.Context, room *Room, round int, p
 		return nil
 	}
 
-	responses := make([]string, len(aiParticipants))
 	var wg sync.WaitGroup
 	var errOnce sync.Once
 	var roundErr error
 
-	for i, p := range aiParticipants {
+	for _, p := range aiParticipants {
 		wg.Add(1)
-		go func(idx int, part Participant) {
+		go func(part Participant) {
 			defer wg.Done()
 			text := fmt.Sprintf("%s\n\nYour turn, %s. Write your response (or \"OK\" if nothing to say).", transcript, part.Name)
 			resp, err := e.agent.SendMessage(part.SessionID, text, part.Agent, part.Model)
@@ -485,30 +485,25 @@ func (e *ChatEngine) runFinalReply(ctx context.Context, room *Room, round int, p
 				errOnce.Do(func() { roundErr = fmt.Errorf("%s: %w", part.Name, err) })
 				resp = fmt.Sprintf("(timeout: %s)", err)
 			}
-			responses[idx] = resp
-		}(i, p)
+			resp = strings.TrimSpace(resp)
+			msg := Message{
+				Round:     round,
+				From:      part.Name,
+				Text:      resp,
+				Timestamp: time.Now(),
+			}
+			if err := e.store.AddMessage(room.ID, msg); err != nil {
+				log.Printf("room %s: final reply add message error: %v", room.ID, err)
+			}
+			if e.logger != nil {
+				_ = e.logger.LogMessage(room.ID, round, part.Name, resp, time.Now())
+			}
+		}(p)
 	}
 
 	wg.Wait()
 	if roundErr != nil {
 		log.Printf("room %s: final reply round %d had participant error(s): %v", room.ID, round+1, roundErr)
-	}
-
-	now := time.Now()
-	for i, p := range aiParticipants {
-		resp := strings.TrimSpace(responses[i])
-		msg := Message{
-			Round:     round,
-			From:      p.Name,
-			Text:      resp,
-			Timestamp: now,
-		}
-		if err := e.store.AddMessage(room.ID, msg); err != nil {
-			return err
-		}
-		if e.logger != nil {
-			_ = e.logger.LogMessage(room.ID, round, p.Name, resp, now)
-		}
 	}
 
 	time.Sleep(e.roundDelay)
@@ -630,7 +625,7 @@ func buildOnboarding(topic string, participants []Participant) string {
 	} else {
 		rules = fmt.Sprintf("There are %d participants. Respond if you have something to say, otherwise reply with exactly \"OK\" to skip your turn.", n)
 	}
-	return fmt.Sprintf("You are in a chat. Topic: %q.\nParticipants: %s.\n\n%s\n\nImportant rules:\n- If you discover an interesting fact, insight, or useful knowledge during the conversation, save it to memory via memory_save immediately.\n- At the end of the chat, you will be asked for a summary.", topic, strings.Join(names, ", "), rules)
+	return fmt.Sprintf("You are in a chat. Topic: %q.\nParticipants: %s.\n\n%s\n\nImportant rules:\n- Answer EVERY question in each message, do not skip any.\n- If you discover an interesting fact, insight, or useful knowledge during the conversation, save it to memory via memory_save immediately.\n- At the end of the chat, you will be asked for a summary.", topic, strings.Join(names, ", "), rules)
 }
 
 // buildHeader returns the participant header for a round prompt.
