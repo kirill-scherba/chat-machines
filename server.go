@@ -27,6 +27,7 @@ Available tools:
 - chat_leave: exit adjunct (human-in-chat) mode.
 - chat_stop: stop a room and collect summaries.
 - chat_stats: get global statistics.
+- chat_display_format: get the canonical display format for chat relays.
 
 Rules:
 - Each participant must have a unique name.
@@ -34,12 +35,14 @@ Rules:
 - When a chat finishes, chat_stop returns a digest (summaries, topic, participants, rounds).
   The caller is responsible for saving it if needed.
 - You may participate in a chat as an adjunct:
-  1. chat_join(room_id) to connect your session to the room.
-  2. The engine pauses at the end of each round and waits for you.
-  3. poll chat_get(room_id) for new messages and relay them to the user.
-  4. when the user speaks, call chat_send(room_id, message) to inject it and unblock the round.
-  5. If you don't respond within the timeout (default 5m), the round continues without you.
-  6. chat_leave(room_id) when done.
+  1. Call chat_display_format once to learn the canonical relay format.
+  2. chat_join(room_id) to connect your session to the room.
+  3. The engine pauses at the end of each round and waits for you.
+  4. poll chat_get(room_id) for new messages.
+  5. Relay messages to the user in the canonical format — no commentary, no emoji, no paraphrasing.
+  6. When the user speaks, call chat_send(room_id, message) to inject it and unblock the round.
+  7. If you don't respond within the timeout (default 5m), the round continues without you.
+  8. chat_leave(room_id) when done.
 `
 
 // NewMCPServer creates and registers all chat-machines MCP tools.
@@ -56,6 +59,7 @@ func NewMCPServer(engine *ChatEngine, externalBaseURL string) *server.MCPServer 
 		chatLeaveTool(engine),
 		chatStopTool(engine),
 		chatStatsTool(engine),
+		chatDisplayFormatTool(),
 	)
 	return s
 }
@@ -430,6 +434,55 @@ func roomDetail(r RoomSnapshot) map[string]any {
 		m["digest"] = r.StoredDigest
 	}
 	return m
+}
+
+func chatDisplayFormatTool() server.ServerTool {
+	t := mcp.NewTool("chat_display_format",
+		mcp.WithDescription("Returns the canonical display format for chat transcripts when relaying messages between chat room and human user. Call this tool once at the start of an adjunct session to learn how to format output."))
+	return server.ServerTool{
+		Tool: t,
+		Handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText(`Chat Display Format for Human Relay
+
+When a human participates in a chat as an adjunct, relay messages in this format:
+
+Раунд N
+
+Ваше сообщение в чат:
+<message from human>
+
+Ответы:
+
+[Participant Name]
+<full response text>
+
+[Participant Name]
+<full response text>
+
+Rules:
+- Use "Раунд N" as headers (Russian)
+- Human messages appear only once per round under "Ваше сообщение в чат"
+- AI responses are listed under "Ответы:" with [Name] headers
+- If the human hasn't spoken yet in a round, omit "Ваше сообщение в чат" section
+- Do NOT add commentary, emoji reactions, or summaries
+- The AI responses are quoted verbatim — do not paraphrase
+
+Example:
+
+Раунд 1
+
+Ваше сообщение в чат:
+Привет! Чем занимаешься?
+
+Ответы:
+
+[Менеджер]
+Привет! Планирую архитектуру нового модуля.
+
+[Мастер]
+Здорóво. Смотрю твой последний PR, есть пара замечаний.`), nil
+		},
+	}
 }
 
 func getString(m map[string]any, key string) string {

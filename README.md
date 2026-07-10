@@ -2,6 +2,8 @@
 
 Multi-AI chat rooms server with MCP management. Первая ступень к Снам Машин (Dream Weaver).
 
+![chat-machines](https://bmat.uk/i/img_1783602061.png)
+
 ## Запуск
 
 ```bash
