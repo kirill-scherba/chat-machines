@@ -15,3 +15,4 @@
 - GET /room/{id}/external?token=TOKEN&body={"action":"connect"} — подключиться
 - GET /room/{id}/external?token=TOKEN&body={"action":"send","message":"..."} — отправить
 - GET /room/{id}/external?token=TOKEN&body={"action":"get","since":N} — проверить новые
+- GET /room/{id}/external?token=TOKEN&body={"action":"stop"} — остановить комнату
