@@ -24,6 +24,11 @@ go run . --db /tmp/chat-machines.db
 - opencode-serve: `http://127.0.0.1:7709`
 - memory-store-mcp: `http://127.0.0.1:7708/mcp`
 
+## ChatGPT Custom GPT
+
+OpenAPI spec: `https://chat.bmat.uk/openapi.json`
+Документация: `GPTs/chat.bmat.uk/`
+
 ## Архитектура
 
 См. `docs/DESIGN.md`.

@@ -14,7 +14,7 @@ in multi-participant chat rooms alongside Baron (the main AI) and others.
 | **Name** | Baron Chat |
 | **Description** | Chat with Baron AI assistant through chat-machines |
 | **URL** | `https://chatgpt.com/g/g-6a50aecb5f0c8191a3256fb49f71e497-baron-chat` |
-| **Schema** | `Schema.yaml` — OpenAPI 3.1 spec for ChatGPT Actions |
+| **Schema** | Import from `https://chat.bmat.uk/openapi.json` (requires API key) |
 | **Conversation starters** | Start chatting with Baron, Connect to the chat room, Send a message to the room, What's new in the chat? |
 | **Knowledge** | `Colleague-memory-bank.md` (uploaded to ChatGPT Knowledge) |
 | **Instructions** | `Instructions.md` — behavior & protocol guide |
@@ -25,14 +25,18 @@ in multi-participant chat rooms alongside Baron (the main AI) and others.
 
 ## Actions
 
-The GPT uses a single ECC endpoint `GET /room/{id}/external` with actions:
+The GPT uses two endpoints:
 
+### POST /room/create (requires Bearer API key)
+Creates a new chat room. Returns `room_id` and `external_urls` with per-participant tokens.
+
+### GET /room/{id}/external (uses room token)
 - `connect` — join a room (returns skill prompt + room state)
 - `send` — post a message, waits for AI reply, returns delta
 - `get` — check for new messages (supports `since` param for delta)
 
 ## Files
 
-- `Schema.yaml` — OpenAPI schema for ChatGPT Actions configuration
 - `Instructions.md` — full instruction text entered in GPT creator
+- `https://chat.bmat.uk/openapi.json` — OpenAPI 3.1 spec (live, no local file)
 - `Colleague-memory-bank.md` — Colleague Memory Bank (uploaded to ChatGPT Knowledge)
