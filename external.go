@@ -355,9 +355,6 @@ func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc
 					},
 				},
 			}
-			spec["security"] = []map[string]any{
-				{"ApiKeyAuth": []string{}},
-			}
 		}
 
 		// Paths.
@@ -370,6 +367,9 @@ func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc
 					"summary":     "Create a new chat room",
 					"description": "Creates a chat room with AI and external participants. External participants receive URLs to join via HTTP.",
 					"operationId": "createRoom",
+					"security": []map[string]any{
+						{"ApiKeyAuth": []string{}},
+					},
 					"requestBody": map[string]any{
 						"required": true,
 						"content": map[string]any{
