@@ -621,9 +621,20 @@ func (e *ChatEngine) closeSessions(room *Room) {
 // RoundlessSend handles a send in roundless mode: adds the external message,
 // triggers all AI participants immediately, and returns the response text.
 func (e *ChatEngine) RoundlessSend(roomID, senderName, message string) (string, error) {
-	// Add external message.
+	// Add external message to both externalResps (for signaling) and Messages (for transcript).
 	if err := e.store.AddExternalParticipantMessage(roomID, senderName, message); err != nil {
 		return "", fmt.Errorf("add message: %w", err)
+	}
+	// In roundless mode, the engine's run loop doesn't pick up externalResps,
+	// so we append the message directly to Messages here.
+	msg := Message{
+		Round:     0,
+		From:      senderName,
+		Text:      message,
+		Timestamp: time.Now(),
+	}
+	if err := e.store.AddMessage(roomID, msg); err != nil {
+		return "", fmt.Errorf("add external message: %w", err)
 	}
 
 	// Find AI participants and collect their sessions.
