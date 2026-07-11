@@ -82,8 +82,9 @@ func (e *ChatEngine) SetSummaryAutoSave(auto bool) {
 }
 
 // CreateChatRoom creates and starts a chat room asynchronously.
-func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, maxRounds int) (string, error) {
-	room := e.store.CreateRoom(topic, maxRounds)
+// mode: "rounds" (default) or "roundless".
+func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, maxRounds int, mode string) (string, error) {
+	room := e.store.CreateRoom(topic, maxRounds, mode)
 	room.externalChannels = make(map[string]chan struct{})
 	room.externalResps = make(map[string]string)
 
@@ -244,6 +245,14 @@ func (e *ChatEngine) run(ctx context.Context, room *Room, done chan struct{}) {
 
 	if err := e.store.SetStatus(room.ID, RoomActive); err != nil {
 		log.Printf("room %s: set active failed: %v", room.ID, err)
+	}
+
+	if room.Mode == "roundless" {
+		// Roundless: no round loop, just wait for stop signal.
+		// External participants trigger AI responses directly via the handler.
+		<-ctx.Done()
+		e.finishRoom(room, ctx.Err())
+		return
 	}
 
 	for {
@@ -609,6 +618,61 @@ func (e *ChatEngine) closeSessions(room *Room) {
 	}
 }
 
+// RoundlessSend handles a send in roundless mode: adds the external message,
+// triggers all AI participants immediately, and returns the response text.
+func (e *ChatEngine) RoundlessSend(roomID, senderName, message string) (string, error) {
+	// Add external message.
+	if err := e.store.AddExternalParticipantMessage(roomID, senderName, message); err != nil {
+		return "", fmt.Errorf("add message: %w", err)
+	}
+
+	// Find AI participants and collect their sessions.
+	snap := e.store.GetRoom(roomID)
+	if snap == nil {
+		return "", fmt.Errorf("room not found")
+	}
+	snap.mu.RLock()
+	participants := make([]Participant, len(snap.Participants))
+	copy(participants, snap.Participants)
+	allMsgs := make([]Message, len(snap.Messages))
+	copy(allMsgs, snap.Messages)
+	currentRound := snap.CurrentRound
+	snap.mu.RUnlock()
+
+	// Build transcript for AI participants.
+	transcript := buildTranscriptFromMessages(allMsgs, participants)
+
+	// Send to each AI participant and collect responses.
+	var responses []string
+	for _, p := range participants {
+		if p.IsExternal() || p.SessionID == "" {
+			continue
+		}
+		text := fmt.Sprintf("%s\n\nYour turn, %s. Write your response.", transcript, p.Name)
+		resp, err := e.agent.SendMessage(p.SessionID, text, p.Agent, p.Model)
+		if err != nil {
+			resp = fmt.Sprintf("(error: %s)", err)
+		} else {
+			resp = strings.TrimSpace(resp)
+		}
+		// Add AI response to room transcript.
+		msg := Message{
+			Round:     currentRound,
+			From:      p.Name,
+			Text:      resp,
+			Timestamp: time.Now(),
+		}
+		if err := e.store.AddMessage(roomID, msg); err != nil {
+			log.Printf("room %s: add message error: %v", roomID, err)
+		}
+		if e.logger != nil {
+			_ = e.logger.LogMessage(roomID, currentRound, p.Name, resp, time.Now())
+		}
+		responses = append(responses, resp)
+	}
+	return strings.Join(responses, "\n"), nil
+}
+
 // collectSummaries asks each participant for a summary.
 func (e *ChatEngine) collectSummaries(room *Room) ([]Summary, error) {
 	room.mu.RLock()
@@ -633,6 +697,22 @@ func (e *ChatEngine) collectSummaries(room *Room) ([]Summary, error) {
 		summaries = append(summaries, Summary{From: p.Name, Text: text})
 	}
 	return summaries, nil
+}
+
+// buildTranscriptFromMessages creates a transcript string from a message list.
+func buildTranscriptFromMessages(msgs []Message, participants []Participant) string {
+	if len(msgs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Conversation so far:\n")
+	for _, m := range msgs {
+		if m.From == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s: %s\n", m.From, m.Text)
+	}
+	return b.String()
 }
 
 // buildOnboarding creates the initial system-style message for each participant.

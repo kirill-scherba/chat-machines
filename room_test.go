@@ -11,7 +11,7 @@ import (
 
 func TestRoomStoreCreateAndGet(t *testing.T) {
 	s := NewRoomStore()
-	r := s.CreateRoom("topic", 5)
+	r := s.CreateRoom("topic", 5, "")
 	if r == nil || r.ID == "" {
 		t.Fatal("expected room with id")
 	}
@@ -26,7 +26,7 @@ func TestRoomStoreCreateAndGet(t *testing.T) {
 
 func TestRoomStoreAddParticipant(t *testing.T) {
 	s := NewRoomStore()
-	r := s.CreateRoom("topic", 5)
+	r := s.CreateRoom("topic", 5, "")
 	if err := s.AddParticipant(r.ID, Participant{Name: "Baron"}); err != nil {
 		t.Fatalf("add participant: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestRoomStoreAddParticipant(t *testing.T) {
 
 func TestRoomStoreSetStatus(t *testing.T) {
 	s := NewRoomStore()
-	r := s.CreateRoom("topic", 5)
+	r := s.CreateRoom("topic", 5, "")
 	if err := s.SetStatus(r.ID, RoomActive); err != nil {
 		t.Fatalf("set active: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRoomStoreSetStatus(t *testing.T) {
 
 func TestRoomStoreAddMessage(t *testing.T) {
 	s := NewRoomStore()
-	r := s.CreateRoom("topic", 5)
+	r := s.CreateRoom("topic", 5, "")
 	if err := s.AddParticipant(r.ID, Participant{Name: "Baron"}); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestRoomStoreAddMessage(t *testing.T) {
 
 func TestRoomStoreConcurrency(t *testing.T) {
 	s := NewRoomStore()
-	r := s.CreateRoom("topic", 5)
+	r := s.CreateRoom("topic", 5, "")
 	for i := 0; i < 10; i++ {
 		if err := s.AddParticipant(r.ID, Participant{Name: "Baron"}); err != nil {
 			t.Fatal(err)

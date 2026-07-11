@@ -24,7 +24,7 @@ func newExternalTestEngine() (*ChatEngine, string, string, string) {
 	roomID, err := engine.CreateChatRoom("external http test", []ParticipantConfig{
 		{Name: "Baron"},
 		{Name: "Lena", Type: "external", Role: "participant", HumanType: "human+agent"},
-	}, 1)
+	}, 1, "")
 	if err != nil {
 		panic(err)
 	}

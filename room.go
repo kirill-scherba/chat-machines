@@ -60,6 +60,7 @@ type Room struct {
 	Messages     []Message
 	CreatedAt    time.Time
 	StoppedAt    *time.Time
+	Mode         string // "rounds" (default) or "roundless"
 
 	// okRounds tracks how many consecutive full-OK rounds happened.
 	okRounds int
@@ -106,6 +107,7 @@ type RoomSnapshot struct {
 	AdjunctName      string        `json:"adjunct_name,omitempty"`
 	HasAdjunct       bool          `json:"has_adjunct"`
 	HasExternals     bool          `json:"has_externals"`
+	Mode             string        `json:"mode,omitempty"`
 	StoredDigest     *Digest       `json:"digest,omitempty"`
 }
 
@@ -146,6 +148,7 @@ func (r *Room) Snapshot() RoomSnapshot {
 		AdjunctName:      r.AdjunctName,
 		HasAdjunct:       r.AdjunctName != "",
 		HasExternals:     hasExternals,
+		Mode:             r.Mode,
 		StoredDigest:     r.StoredDigest,
 	}
 }
@@ -184,9 +187,13 @@ func NewRoomStore() *RoomStore {
 }
 
 // CreateRoom creates a new room in waiting status.
-func (s *RoomStore) CreateRoom(topic string, maxRounds int) *Room {
+// mode: "rounds" (default) or "roundless".
+func (s *RoomStore) CreateRoom(topic string, maxRounds int, mode string) *Room {
 	if maxRounds <= 0 {
 		maxRounds = 10
+	}
+	if mode == "" {
+		mode = "rounds"
 	}
 	r := &Room{
 		ID:        uuid.New().String(),
@@ -195,6 +202,7 @@ func (s *RoomStore) CreateRoom(topic string, maxRounds int) *Room {
 		Status:    RoomWaiting,
 		CreatedAt: time.Now(),
 		Messages:  make([]Message, 0, maxRounds*4),
+		Mode:      mode,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -88,6 +88,9 @@ func chatCreateTool(engine *ChatEngine, externalBaseURL string) server.ServerToo
 		mcp.WithNumber("max_rounds",
 			mcp.Description("Maximum number of rounds (default: 10)"),
 			mcp.DefaultNumber(10)),
+		mcp.WithString("mode",
+			mcp.Description("Chat mode: 'rounds' (default) or 'roundless' (external send triggers AI directly)"),
+			mcp.DefaultString("rounds")),
 	)
 	return server.ServerTool{
 		Tool: t,
@@ -151,7 +154,8 @@ func chatCreateTool(engine *ChatEngine, externalBaseURL string) server.ServerToo
 				})
 			}
 
-			roomID, err := engine.CreateChatRoom(topic, configs, maxRounds)
+			mode, _ := args["mode"].(string)
+			roomID, err := engine.CreateChatRoom(topic, configs, maxRounds, mode)
 			if err != nil {
 				return resultError(fmt.Errorf("create chat room: %w", err))
 			}

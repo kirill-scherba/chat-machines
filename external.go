@@ -102,18 +102,28 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 				http.Error(w, `{"error":"message is required for action=send"}`, http.StatusBadRequest)
 				return
 			}
-			// Capture current round and message count before the send.
+			// Check mode.
 			snapBefore, _ := engine.GetRoomSnapshot(roomID)
-			roundBefore := snapBefore.CurrentRound
 			since := len(snapBefore.Messages)
 
-			if err := engine.store.AddExternalParticipantMessage(roomID, p.Name, body.Message); err != nil {
-				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusConflict)
-				return
-			}
+			if snapBefore.Mode == "roundless" {
+				// Roundless: trigger AI directly, no round wait.
+				if _, err := engine.RoundlessSend(roomID, p.Name, body.Message); err != nil {
+					http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+					return
+				}
+			} else {
+				// Round-based: add message and wait for round advance.
+				roundBefore := snapBefore.CurrentRound
 
-			// Wait up to 30 seconds for the engine to finish the round (AI replies).
-			engine.WaitForRoundAdvance(roomID, roundBefore, p.Name, 30*time.Second)
+				if err := engine.store.AddExternalParticipantMessage(roomID, p.Name, body.Message); err != nil {
+					http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusConflict)
+					return
+				}
+
+				// Wait up to 30 seconds for the engine to finish the round (AI replies).
+				engine.WaitForRoundAdvance(roomID, roundBefore, p.Name, 30*time.Second)
+			}
 
 			renderExternalResponse(w, engine, roomID, p, baseURL, since)
 		case "stop":
@@ -217,6 +227,7 @@ func buildRoundGroups(messages []Message) []RoundGroup {
 type createRequestBody struct {
 	Topic      string              `json:"topic"`
 	MaxRounds  int                 `json:"max_rounds"`
+	Mode       string              `json:"mode"`
 	Participants []json.RawMessage `json:"participants"`
 }
 
@@ -303,7 +314,7 @@ func CreateHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc 
 			})
 		}
 
-		roomID, err := engine.CreateChatRoom(body.Topic, configs, body.MaxRounds)
+		roomID, err := engine.CreateChatRoom(body.Topic, configs, body.MaxRounds, body.Mode)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"create room: %s"}`, err), http.StatusInternalServerError)
 			return
@@ -337,6 +348,7 @@ func CreateHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc 
 			"topic":         snap.Topic,
 			"participants":  configs,
 			"max_rounds":    snap.MaxRounds,
+			"mode":          snap.Mode,
 			"status":        snap.Status,
 			"external_urls": externalURLs,
 		})
@@ -406,6 +418,11 @@ func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc
 											"description": "Max chat rounds (default 30)",
 											"default":     30,
 										},
+										"mode": schemaObj{
+											"type":        "string",
+											"enum":        []string{"rounds", "roundless"},
+											"description": "Chat mode: 'rounds' (default, round-based) or 'roundless' (send triggers AI directly)",
+										},
 										"participants": schemaObj{
 											"type": "array",
 											"items": schemaObj{
@@ -458,6 +475,7 @@ func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc
 											"topic":     schemaObj{"type": "string"},
 											"status":    schemaObj{"type": "string"},
 											"max_rounds": schemaObj{"type": "integer"},
+											"mode":       schemaObj{"type": "string"},
 											"participants": schemaObj{"type": "array"},
 											"external_urls": schemaObj{
 												"type":        "object",

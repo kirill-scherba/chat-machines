@@ -134,7 +134,7 @@ func TestEngineTwoParticipants(t *testing.T) {
 	roomID, err := engine.CreateChatRoom("project status", []ParticipantConfig{
 		{Name: "Baron"},
 		{Name: "Manager"},
-	}, 3)
+	}, 3, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestEngineAutoStopOnOK(t *testing.T) {
 		{Name: "A"},
 		{Name: "B"},
 		{Name: "C"},
-	}, 10)
+	}, 10, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestEngineMaxRounds(t *testing.T) {
 	roomID, err := engine.CreateChatRoom("max rounds", []ParticipantConfig{
 		{Name: "A"},
 		{Name: "B"},
-	}, 2)
+	}, 2, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestEngineStopRoom(t *testing.T) {
 	roomID, err := engine.CreateChatRoom("manual stop", []ParticipantConfig{
 		{Name: "A"},
 		{Name: "B"},
-	}, 100)
+	}, 100, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestStopRoomReturnsDigest(t *testing.T) {
 		{Name: "A"},
 		{Name: "B"},
 		{Name: "C"},
-	}, 100)
+	}, 100, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -340,8 +340,8 @@ func TestEngineStopAll(t *testing.T) {
 	engine := NewChatEngine(client)
 	defer engine.StopAll()
 
-	r1, _ := engine.CreateChatRoom("room1", []ParticipantConfig{{Name: "X"}, {Name: "Y"}}, 5)
-	r2, _ := engine.CreateChatRoom("room2", []ParticipantConfig{{Name: "P"}, {Name: "Q"}}, 5)
+	r1, _ := engine.CreateChatRoom("room1", []ParticipantConfig{{Name: "X"}, {Name: "Y"}}, 5, "")
+	r2, _ := engine.CreateChatRoom("room2", []ParticipantConfig{{Name: "P"}, {Name: "Q"}}, 5, "")
 
 	time.Sleep(50 * time.Millisecond)
 	engine.StopAll()
@@ -368,7 +368,7 @@ func TestCompletionsCleanedUpAfterNaturalFinish(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("natural finish", []ParticipantConfig{
 		{Name: "A"}, {Name: "B"},
-	}, 5)
+	}, 5, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestOKProtocolMixedResponses(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("mixed ok", []ParticipantConfig{
 		{Name: "A"}, {Name: "B"}, {Name: "C"},
-	}, 10)
+	}, 10, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestOKProtocolResets(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("ok reset", []ParticipantConfig{
 		{Name: "A"}, {Name: "B"}, {Name: "C"},
-	}, 10)
+	}, 10, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestEngineChatSendAndAdjunct(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("adjunct", []ParticipantConfig{
 		{Name: "A"}, {Name: "B"},
-	}, 1)
+	}, 1, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestAdjunctWaitBlocks(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("adjunct wait", []ParticipantConfig{
 		{Name: "A"},
-	}, 1)
+	}, 1, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestAdjunctTimeout(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("adjunct timeout", []ParticipantConfig{
 		{Name: "A"},
-	}, 2)
+	}, 2, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -723,7 +723,7 @@ func TestAdjunctMultipleRounds(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("adjunct rounds", []ParticipantConfig{
 		{Name: "A"},
-	}, 2)
+	}, 2, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -797,7 +797,7 @@ func TestAdjunctLeaveUnblocks(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("adjunct leave", []ParticipantConfig{
 		{Name: "A"},
-	}, 2)
+	}, 2, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -863,7 +863,7 @@ func TestStopRoomWhileAdjunctWaiting(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("stop while waiting", []ParticipantConfig{
 		{Name: "A"},
-	}, 100)
+	}, 100, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -919,7 +919,7 @@ func TestAdjunctRejoinUnblocksWaiter(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("adjunct rejoin", []ParticipantConfig{
 		{Name: "A"},
-	}, 2)
+	}, 2, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -1000,7 +1000,7 @@ func TestHumanLastMessageNotLost(t *testing.T) {
 
 	roomID, err := engine.CreateChatRoom("human last msg", []ParticipantConfig{
 		{Name: "A"},
-	}, 3)
+	}, 3, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -1089,7 +1089,7 @@ func TestCreateChatRoomWithExternalParticipants(t *testing.T) {
 	roomID, err := engine.CreateChatRoom("external test", []ParticipantConfig{
 		{Name: "Baron"},
 		{Name: "Kirill", Type: "external", Role: "controller", HumanType: "human"},
-	}, 3)
+	}, 3, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -1144,7 +1144,7 @@ func TestRunRoundWaitsForExternalParticipant(t *testing.T) {
 	roomID, err := engine.CreateChatRoom("external round", []ParticipantConfig{
 		{Name: "Baron"},
 		{Name: "Lena", Type: "external", Role: "participant", HumanType: "human+agent"},
-	}, 1)
+	}, 1, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -1214,7 +1214,7 @@ func TestExternalParticipantTimeout(t *testing.T) {
 	roomID, err := engine.CreateChatRoom("external timeout", []ParticipantConfig{
 		{Name: "A"},
 		{Name: "External", Type: "external", Role: "participant", HumanType: "human"},
-	}, 3)
+	}, 3, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -1262,7 +1262,7 @@ func TestMultipleExternalParticipants(t *testing.T) {
 		{Name: "A"},
 		{Name: "X", Type: "external", Role: "participant", HumanType: "human"},
 		{Name: "Y", Type: "external", Role: "participant", HumanType: "human"},
-	}, 1)
+	}, 1, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -1314,7 +1314,7 @@ func TestStartRoomSkipsExternalSessions(t *testing.T) {
 	roomID, err := engine.CreateChatRoom("mixed participants", []ParticipantConfig{
 		{Name: "Baron"},
 		{Name: "Kirill", Type: "external", Role: "controller", HumanType: "human"},
-	}, 3)
+	}, 3, "")
 	if err != nil {
 		t.Fatalf("create chat room: %v", err)
 	}
@@ -1346,7 +1346,7 @@ func TestRunFinalReplySkipsExternalParticipants(t *testing.T) {
 	engine.SetRoundDelay(0)
 	defer engine.StopAll()
 
-	room := engine.store.CreateRoom("final reply skip", 2)
+	room := engine.store.CreateRoom("final reply skip", 2, "")
 	room.Status = RoomActive
 	room.CurrentRound = 1
 	room.Participants = []Participant{
