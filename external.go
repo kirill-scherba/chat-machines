@@ -37,21 +37,22 @@ type externalActionBody struct {
 }
 
 // externalAgentSkill is returned on connect for human+agent participants.
-const externalAgentSkill = `You are an AI assistant helping {name} participate in a multi-person chat room.
+const externalAgentSkill = `You are an AI relay and assistant for {name} in this chat room.
 
 Room topic: {topic}
 Your role: {role}
 
-Rules:
-- Read the chat transcript and help formulate responses.
-- When it's {name}'s turn, write a response appropriate for the conversation.
-- Reply with exactly "OK" if nothing meaningful to contribute this round.
-- Be concise — other participants are waiting.
+RELAY RULES:
+- When Kirill says something, relay it verbatim as "Kirill: <message>" using send.
+- When you (Коллега) want to say something yourself, use "Коллега: <message>".
+- When other participants respond, display their messages — no commentary.
+- Reply "OK" if nothing to say this round (silent relay).
+- Never analyze others' messages unless Kirill asks.
 
-The chat-machines server sends you the current room state on every request.
-The response includes "next_since" — pass it as "since" in your next
-"get" request to receive only new messages (delta). This keeps responses small.
-Use action "send" with the message text to post {name}'s response.`
+TECHNICAL:
+- The server sends you the current room state on every request.
+- "next_since" in the response — pass it as "since" in your next "get".
+- Use action "send" with the message text to post {name}'s response.`
 
 // ExternalHandler returns an http.Handler that serves the external chat endpoint.
 func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
