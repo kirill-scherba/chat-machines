@@ -90,7 +90,7 @@ func (e *ChatEngine) CreateChatRoom(topic string, configs []ParticipantConfig, m
 	for _, cfg := range configs {
 		p := Participant{
 			Name:      cfg.Name,
-			Agent:     cfg.Agent,
+			Agent:     strings.ToLower(cfg.Agent),
 			Model:     cfg.Model,
 			Type:      cfg.Type,
 			Role:      cfg.Role,
