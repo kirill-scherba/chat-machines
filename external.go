@@ -116,6 +116,25 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 			engine.WaitForRoundAdvance(roomID, roundBefore, p.Name, 30*time.Second)
 
 			renderExternalResponse(w, engine, roomID, p, baseURL, since)
+		case "stop":
+			snap, ok := engine.GetRoomSnapshot(roomID)
+			if !ok {
+				http.Error(w, `{"error":"room not found"}`, http.StatusNotFound)
+				return
+			}
+			if snap.Status == RoomStopped {
+				http.Error(w, `{"error":"room already stopped"}`, http.StatusConflict)
+				return
+			}
+			if err := engine.StopRoom(roomID); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"stop room: %s"}`, err), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"status":  "stopped",
+				"room_id": roomID,
+			})
 		default:
 			http.Error(w, `{"error":"unknown action"}`, http.StatusBadRequest)
 		}
@@ -479,7 +498,7 @@ func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc
 							"required": true,
 							"schema": schemaObj{
 								"type": "string",
-								"description": "URL-encoded JSON: {\"action\":\"connect|get|send\", \"message\":\"...\", \"since\":0}",
+								"description": "URL-encoded JSON: {\"action\":\"connect|get|send|stop\", \"message\":\"...\", \"since\":0}",
 							},
 						},
 					},
