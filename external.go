@@ -331,7 +331,7 @@ func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc
 		w.Header().Set("Content-Type", "application/json")
 
 		spec := map[string]any{
-			"openapi": "3.0.0",
+			"openapi": "3.1.0",
 			"info": map[string]any{
 				"title":       "Chat Machines API",
 				"description": "Multi-AI chat room management for ChatGPT Actions",
@@ -345,6 +345,7 @@ func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc
 		// Security scheme (only if apiKey is set).
 		if apiKey != "" {
 			spec["components"] = map[string]any{
+				"schemas": map[string]any{},
 				"securitySchemes": map[string]any{
 					"ApiKeyAuth": map[string]any{
 						"type":         "http",
