@@ -191,6 +191,323 @@ func buildRoundGroups(messages []Message) []RoundGroup {
 	return out
 }
 
+// --- Room creation endpoint (POST /room/create) ---
+
+// createRequestBody is the JSON body for POST /room/create.
+type createRequestBody struct {
+	Topic      string              `json:"topic"`
+	MaxRounds  int                 `json:"max_rounds"`
+	Participants []json.RawMessage `json:"participants"`
+}
+
+// CreateHandler returns an http.HandlerFunc for POST /room/create.
+// Requires Bearer token matching apiKey.
+func CreateHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"only POST allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Bearer auth check.
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != apiKey {
+			http.Error(w, `{"error":"invalid or missing API key"}`, http.StatusUnauthorized)
+			return
+		}
+
+		var body createRequestBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"invalid JSON body: %s"}`, err), http.StatusBadRequest)
+			return
+		}
+
+		if body.Topic == "" {
+			http.Error(w, `{"error":"topic is required"}`, http.StatusBadRequest)
+			return
+		}
+		if len(body.Participants) < 1 {
+			http.Error(w, `{"error":"at least 1 participant required"}`, http.StatusBadRequest)
+			return
+		}
+		if body.MaxRounds <= 0 {
+			body.MaxRounds = 30
+		}
+
+		configs := make([]ParticipantConfig, 0, len(body.Participants))
+		seen := make(map[string]bool)
+		for _, raw := range body.Participants {
+			var p struct {
+				Name      string `json:"name"`
+				Agent     string `json:"agent"`
+				Model     string `json:"model"`
+				Type      string `json:"type"`
+				Role      string `json:"role"`
+				HumanType string `json:"human_type"`
+			}
+			if err := json.Unmarshal(raw, &p); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"invalid participant: %s"}`, err), http.StatusBadRequest)
+				return
+			}
+			if p.Name == "" {
+				http.Error(w, `{"error":"participant name is required"}`, http.StatusBadRequest)
+				return
+			}
+			if seen[p.Name] {
+				http.Error(w, fmt.Sprintf(`{"error":"duplicate participant name %q"}`, p.Name), http.StatusBadRequest)
+				return
+			}
+			seen[p.Name] = true
+			if p.Type == "" {
+				p.Type = "ai"
+			}
+			if p.Type != "ai" && p.Type != "external" {
+				http.Error(w, fmt.Sprintf(`{"error":"participant %q: type must be 'ai' or 'external'"}`, p.Name), http.StatusBadRequest)
+				return
+			}
+			if p.Type == "external" && p.HumanType == "" {
+				http.Error(w, fmt.Sprintf(`{"error":"participant %q: external requires human_type"}`, p.Name), http.StatusBadRequest)
+				return
+			}
+			if p.Type == "external" && p.Role == "" {
+				http.Error(w, fmt.Sprintf(`{"error":"participant %q: external requires role"}`, p.Name), http.StatusBadRequest)
+				return
+			}
+			configs = append(configs, ParticipantConfig{
+				Name:      p.Name,
+				Agent:     p.Agent,
+				Model:     p.Model,
+				Type:      p.Type,
+				Role:      p.Role,
+				HumanType: p.HumanType,
+			})
+		}
+
+		roomID, err := engine.CreateChatRoom(body.Topic, configs, body.MaxRounds)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"create room: %s"}`, err), http.StatusInternalServerError)
+			return
+		}
+
+		snap, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			http.Error(w, `{"error":"room disappeared after creation"}`, http.StatusInternalServerError)
+			return
+		}
+
+		// Build per-participant external URLs.
+		externalURLs := make(map[string]string)
+		if baseURL != "" {
+			room := engine.GetRoom(roomID)
+			if room != nil {
+				room.mu.RLock()
+				for _, p := range room.Participants {
+					if p.IsExternal() {
+						externalURLs[p.Name] = fmt.Sprintf("%s/room/%s/external?token=%s", baseURL, roomID, p.token)
+					}
+				}
+				room.mu.RUnlock()
+			}
+		}
+
+		log.Printf("ecc create: room=%s topic=%q participants=%d externals=%d", roomID, body.Topic, len(configs), len(externalURLs))
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"room_id":       snap.ID,
+			"topic":         snap.Topic,
+			"participants":  configs,
+			"max_rounds":    snap.MaxRounds,
+			"status":        snap.Status,
+			"external_urls": externalURLs,
+		})
+	}
+}
+
+// --- OpenAPI schema endpoint ---
+
+// OpenAPIHandler serves the OpenAPI 3.0 spec for ChatGPT Actions integration.
+func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		spec := map[string]any{
+			"openapi": "3.0.0",
+			"info": map[string]any{
+				"title":       "Chat Machines API",
+				"description": "Multi-AI chat room management for ChatGPT Actions",
+				"version":     "1.0.0",
+			},
+			"servers": []map[string]any{
+				{"url": baseURL},
+			},
+		}
+
+		// Security scheme (only if apiKey is set).
+		if apiKey != "" {
+			spec["components"] = map[string]any{
+				"securitySchemes": map[string]any{
+					"ApiKeyAuth": map[string]any{
+						"type":         "http",
+						"scheme":       "bearer",
+						"description": "API key for room creation",
+					},
+				},
+			}
+			spec["security"] = []map[string]any{
+				{"ApiKeyAuth": []string{}},
+			}
+		}
+
+		// Paths.
+		type schemaObj map[string]any
+		type paramObj map[string]any
+
+		paths := map[string]any{
+			"/room/create": map[string]any{
+				"post": map[string]any{
+					"summary":     "Create a new chat room",
+					"description": "Creates a chat room with AI and external participants. External participants receive URLs to join via HTTP.",
+					"operationId": "createRoom",
+					"requestBody": map[string]any{
+						"required": true,
+						"content": map[string]any{
+							"application/json": map[string]any{
+								"schema": schemaObj{
+									"type": "object",
+									"properties": schemaObj{
+										"topic": schemaObj{
+											"type":        "string",
+											"description": "Chat topic",
+											"example":     "Chess club meeting",
+										},
+										"max_rounds": schemaObj{
+											"type":        "integer",
+											"description": "Max chat rounds (default 30)",
+											"default":     30,
+										},
+										"participants": schemaObj{
+											"type": "array",
+											"items": schemaObj{
+												"type": "object",
+												"properties": schemaObj{
+													"name": schemaObj{
+														"type":        "string",
+														"description": "Participant name",
+														"example":     "Baron",
+													},
+													"agent": schemaObj{
+														"type":        "string",
+														"description": "AI agent name (for type=ai)",
+														"example":     "baron",
+													},
+													"type": schemaObj{
+														"type":        "string",
+														"enum":        []string{"ai", "external"},
+														"description": "'ai' (default) or 'external'",
+													},
+													"role": schemaObj{
+														"type":        "string",
+														"enum":        []string{"controller", "participant"},
+														"description": "Required for external participants",
+													},
+													"human_type": schemaObj{
+														"type":        "string",
+														"enum":        []string{"human", "human+agent"},
+														"description": "Required for external participants",
+													},
+												},
+												"required": []string{"name"},
+											},
+										},
+									},
+									"required": []string{"topic", "participants"},
+								},
+							},
+						},
+					},
+					"responses": schemaObj{
+						"200": schemaObj{
+							"description": "Room created successfully",
+							"content": schemaObj{
+								"application/json": schemaObj{
+									"schema": schemaObj{
+										"type": "object",
+										"properties": schemaObj{
+											"room_id":   schemaObj{"type": "string"},
+											"topic":     schemaObj{"type": "string"},
+											"status":    schemaObj{"type": "string"},
+											"max_rounds": schemaObj{"type": "integer"},
+											"participants": schemaObj{"type": "array"},
+											"external_urls": schemaObj{
+												"type":        "object",
+												"description": "Map of participant name → ECC URL with token",
+											},
+										},
+									},
+								},
+							},
+						},
+						"401": schemaObj{
+							"description": "Invalid or missing API key",
+						},
+					},
+				},
+			},
+			"/room/{room_id}/external": map[string]any{
+				"get": map[string]any{
+					"summary":     "Interact with a chat room",
+					"description": "Connect, send messages, or get room state via query parameters",
+					"operationId": "roomAction",
+					"parameters": []paramObj{
+						{
+							"name":     "room_id",
+							"in":       "path",
+							"required": true,
+							"schema":   schemaObj{"type": "string"},
+						},
+						{
+							"name":     "token",
+							"in":       "query",
+							"required": true,
+							"schema":   schemaObj{"type": "string"},
+						},
+						{
+							"name":     "body",
+							"in":       "query",
+							"required": true,
+							"schema": schemaObj{
+								"type": "string",
+								"description": "URL-encoded JSON: {\"action\":\"connect|get|send\", \"message\":\"...\", \"since\":0}",
+							},
+						},
+					},
+					"responses": schemaObj{
+						"200": schemaObj{
+							"description": "Room state / action result",
+							"content": schemaObj{
+								"application/json": schemaObj{
+									"schema": schemaObj{
+										"type": "object",
+										"properties": schemaObj{
+											"room":       schemaObj{"type": "object"},
+											"rounds":     schemaObj{"type": "array"},
+											"prompt":     schemaObj{"type": "string"},
+											"next_since": schemaObj{"type": "integer"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		spec["paths"] = paths
+
+		json.NewEncoder(w).Encode(spec)
+	}
+}
+
 // buildExternalPrompt returns the instruction for the external participant.
 func buildExternalPrompt(snap RoomSnapshot, name string) string {
 	switch snap.Status {

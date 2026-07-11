@@ -36,6 +36,7 @@ func main() {
 	autoSave := flag.Bool("auto-save", false, "automatically save digest to memory-store-mcp on chat stop")
 	messageTimeout := flag.Duration("timeout", 120*time.Second, "per-message timeout")
 	adjunctTimeout := flag.Duration("adjunct-timeout", 5*time.Minute, "human adjunct response timeout (default: 5m)")
+	apiKey := flag.String("api-key", "", "API key for Bearer auth on /room/create endpoint")
 	logDir := flag.String("log-dir", "", "log output directory (default: stderr only)")
 
 	flag.Parse()
@@ -74,6 +75,12 @@ func main() {
 	// Start external HTTP endpoint for non-opencode participants.
 	if *externalAddr != "" {
 		externalMux := http.NewServeMux()
+		// Exact routes registered before the catch-all.
+		if *apiKey != "" {
+			externalMux.HandleFunc("/room/create", CreateHandler(engine, *externalBaseURL, *apiKey))
+		}
+		externalMux.HandleFunc("/openapi.json", OpenAPIHandler(engine, *externalBaseURL, *apiKey))
+		// Catch-all: room lookup by ID in path.
 		externalMux.Handle("/room/", ExternalHandler(engine, *externalBaseURL))
 		go func() {
 			log.Printf("External HTTP server listening on %s", *externalAddr)
