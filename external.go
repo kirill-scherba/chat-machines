@@ -31,10 +31,14 @@ type RoundGroup struct {
 
 // externalActionBody is decoded from the URL-encoded JSON body parameter.
 type externalActionBody struct {
-	Action  string `json:"action"`
-	Message string `json:"message,omitempty"`
-	Since   int    `json:"since,omitempty"`
-	From    string `json:"from,omitempty"`
+	Action   string `json:"action"`
+	Message  string `json:"message,omitempty"`
+	Since    int    `json:"since,omitempty"`
+	From     string `json:"from,omitempty"`
+	Messages []struct {
+		From string `json:"from"`
+		Text string `json:"text"`
+	} `json:"messages,omitempty"`
 }
 
 // externalAgentSkill is returned on connect for human+agent participants.
@@ -99,39 +103,88 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 		case "connect", "get":
 			renderExternalResponse(w, engine, roomID, p, baseURL, body.Since)
 		case "send":
-			if strings.TrimSpace(body.Message) == "" {
-				http.Error(w, `{"error":"message is required for action=send"}`, http.StatusBadRequest)
-				return
-			}
-			// Use from field if provided, otherwise default to participant name.
-			fromName := p.Name
-			if body.From != "" {
-				fromName = body.From
-			}
-			// Check mode.
-			snapBefore, _ := engine.GetRoomSnapshot(roomID)
-			since := len(snapBefore.Messages)
-
-			if snapBefore.Mode == "roundless" {
-				// Roundless: trigger AI directly, no round wait.
-				if _, err := engine.RoundlessSend(roomID, fromName, body.Message); err != nil {
-					http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+			if body.Messages == nil {
+				// Single message (backward compatible).
+				if strings.TrimSpace(body.Message) == "" {
+					http.Error(w, `{"error":"message is required for action=send"}`, http.StatusBadRequest)
 					return
 				}
+				fromName := p.Name
+				if body.From != "" {
+					fromName = body.From
+				}
+				snapBefore, _ := engine.GetRoomSnapshot(roomID)
+				since := len(snapBefore.Messages)
+				if snapBefore.Mode == "roundless" {
+					if _, err := engine.RoundlessSend(roomID, fromName, body.Message); err != nil {
+						http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+						return
+					}
+				} else {
+					roundBefore := snapBefore.CurrentRound
+					if err := engine.store.AddExternalParticipantMessage(roomID, p.Name, body.Message); err != nil {
+						http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusConflict)
+						return
+					}
+					engine.WaitForRoundAdvance(roomID, roundBefore, p.Name, 30*time.Second)
+				}
+				renderExternalResponse(w, engine, roomID, p, baseURL, since)
 			} else {
-				// Round-based: add message and wait for round advance.
-				roundBefore := snapBefore.CurrentRound
-
-				if err := engine.store.AddExternalParticipantMessage(roomID, p.Name, body.Message); err != nil {
-					http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusConflict)
+				// Batch messages: send multiple in one call.
+				if len(body.Messages) == 0 {
+					http.Error(w, `{"error":"messages array is empty"}`, http.StatusBadRequest)
 					return
 				}
-
-				// Wait up to 30 seconds for the engine to finish the round (AI replies).
-				engine.WaitForRoundAdvance(roomID, roundBefore, p.Name, 30*time.Second)
+				for _, m := range body.Messages {
+					if strings.TrimSpace(m.Text) == "" {
+						http.Error(w, `{"error":"each message must have text"}`, http.StatusBadRequest)
+						return
+					}
+					if m.From == "" {
+						m.From = p.Name
+					}
+				}
+				snapBefore, _ := engine.GetRoomSnapshot(roomID)
+				since := len(snapBefore.Messages)
+				if snapBefore.Mode == "roundless" {
+					// Roundless: add each message directly to transcripts, then trigger AI once.
+					for _, m := range body.Messages {
+						if err := engine.store.AddExternalParticipantMessage(roomID, p.Name, m.Text); err != nil {
+							http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+							return
+						}
+						msg := Message{
+							Round:     0,
+							From:      m.From,
+							Text:      m.Text,
+							Timestamp: time.Now(),
+						}
+						if err := engine.store.AddMessage(roomID, msg); err != nil {
+							http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+							return
+						}
+					}
+					if _, err := engine.RoundlessSendAI(roomID); err != nil {
+						http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+						return
+					}
+				} else {
+					// Rounds: concatenate all messages into one (one message per round per external),
+					// signal engine once, and wait for round advance.
+					var parts []string
+					for _, m := range body.Messages {
+						parts = append(parts, m.From+": "+m.Text)
+					}
+					combined := strings.Join(parts, "\n")
+					roundBefore := snapBefore.CurrentRound
+					if err := engine.store.AddExternalParticipantMessage(roomID, p.Name, combined); err != nil {
+						http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusConflict)
+						return
+					}
+					engine.WaitForRoundAdvance(roomID, roundBefore, p.Name, 30*time.Second)
+				}
+				renderExternalResponse(w, engine, roomID, p, baseURL, since)
 			}
-
-			renderExternalResponse(w, engine, roomID, p, baseURL, since)
 		case "stop":
 			snap, ok := engine.GetRoomSnapshot(roomID)
 			if !ok {
@@ -522,7 +575,7 @@ func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc
 							"required": true,
 							"schema": schemaObj{
 								"type": "string",
-								"description": "URL-encoded JSON: {\"action\":\"connect|get|send|stop\", \"message\":\"...\", \"since\":0, \"from\":\"...\"} — optional 'from' sets the sender name for action=send",
+								"description": "URL-encoded JSON: {\"action\":\"connect|get|send|stop\", \"message\":\"...\", \"since\":0, \"from\":\"...\", \"messages\":[{\"from\":\"Name\",\"text\":\"...\"}]} — for action=send: message (single) or messages (batch, roundless); from sets sender name for single sends",
 							},
 						},
 					},

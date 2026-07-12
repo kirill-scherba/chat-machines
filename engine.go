@@ -637,6 +637,18 @@ func (e *ChatEngine) RoundlessSend(roomID, senderName, message string) (string, 
 		return "", fmt.Errorf("add external message: %w", err)
 	}
 
+	return e.triggerAIParticipants(roomID)
+}
+
+// RoundlessSendAI triggers AI participants in roundless mode without adding
+// a new external message. Used after batch-adding multiple messages via Messages array.
+func (e *ChatEngine) RoundlessSendAI(roomID string) (string, error) {
+	return e.triggerAIParticipants(roomID)
+}
+
+// triggerAIParticipants sends the current transcript to all AI participants
+// and collects their responses with an 8-second timeout per AI.
+func (e *ChatEngine) triggerAIParticipants(roomID string) (string, error) {
 	// Find AI participants and collect their sessions.
 	snap := e.store.GetRoom(roomID)
 	if snap == nil {
