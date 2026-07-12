@@ -34,7 +34,8 @@ Rules:
 - Use max_rounds to prevent infinite chats.
 - When a chat finishes, chat_stop returns a digest (summaries, topic, participants, rounds).
   The caller is responsible for saving it if needed.
-- You may participate in a chat as an adjunct:
+- (FOR HUMAN ADJUNCT RELAY ONLY — AI participants already in a room must skip this)
+  You may participate in a chat as an adjunct:
   1. Call chat_display_format once to learn the canonical relay format.
   2. chat_join(room_id) to connect your session to the room.
   3. The engine pauses at the end of each round and waits for you.
