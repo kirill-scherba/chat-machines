@@ -34,6 +34,7 @@ type externalActionBody struct {
 	Action  string `json:"action"`
 	Message string `json:"message,omitempty"`
 	Since   int    `json:"since,omitempty"`
+	From    string `json:"from,omitempty"`
 }
 
 // externalAgentSkill is returned on connect for human+agent participants.
@@ -102,13 +103,18 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 				http.Error(w, `{"error":"message is required for action=send"}`, http.StatusBadRequest)
 				return
 			}
+			// Use from field if provided, otherwise default to participant name.
+			fromName := p.Name
+			if body.From != "" {
+				fromName = body.From
+			}
 			// Check mode.
 			snapBefore, _ := engine.GetRoomSnapshot(roomID)
 			since := len(snapBefore.Messages)
 
 			if snapBefore.Mode == "roundless" {
 				// Roundless: trigger AI directly, no round wait.
-				if _, err := engine.RoundlessSend(roomID, p.Name, body.Message); err != nil {
+				if _, err := engine.RoundlessSend(roomID, fromName, body.Message); err != nil {
 					http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
 					return
 				}
@@ -516,7 +522,7 @@ func OpenAPIHandler(engine *ChatEngine, baseURL, apiKey string) http.HandlerFunc
 							"required": true,
 							"schema": schemaObj{
 								"type": "string",
-								"description": "URL-encoded JSON: {\"action\":\"connect|get|send|stop\", \"message\":\"...\", \"since\":0}",
+								"description": "URL-encoded JSON: {\"action\":\"connect|get|send|stop\", \"message\":\"...\", \"since\":0, \"from\":\"...\"} — optional 'from' sets the sender name for action=send",
 							},
 						},
 					},
