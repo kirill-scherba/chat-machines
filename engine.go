@@ -653,19 +653,38 @@ func (e *ChatEngine) RoundlessSend(roomID, senderName, message string) (string, 
 	// Build transcript for AI participants.
 	transcript := buildTranscriptFromMessages(allMsgs, participants)
 
-	// Send to each AI participant and collect responses.
+	// Send to each AI participant and collect responses with 8s timeout.
 	var responses []string
+	timeout := 8 * time.Second
 	for _, p := range participants {
 		if p.IsExternal() || p.SessionID == "" {
 			continue
 		}
 		text := fmt.Sprintf("%s\n\nYour turn, %s. Write your response.", transcript, p.Name)
-		resp, err := e.agent.SendMessage(p.SessionID, text, p.Agent, p.Model)
-		if err != nil {
-			resp = fmt.Sprintf("(error: %s)", err)
-		} else {
-			resp = strings.TrimSpace(resp)
+
+		type aiResult struct {
+			resp string
+			err  error
 		}
+		ch := make(chan aiResult, 1)
+		go func(sid, txt, ag, mdl string) {
+			r, e := e.agent.SendMessage(sid, txt, ag, mdl)
+			ch <- aiResult{r, e}
+		}(p.SessionID, text, p.Agent, p.Model)
+
+		var resp string
+		select {
+		case result := <-ch:
+			if result.err != nil {
+				resp = fmt.Sprintf("(error: %s)", result.err)
+			} else {
+				resp = strings.TrimSpace(result.resp)
+			}
+		case <-time.After(timeout):
+			log.Printf("room %s: %s timeout after %v", roomID, p.Name, timeout)
+			continue
+		}
+
 		// Add AI response to room transcript.
 		msg := Message{
 			Round:     currentRound,
