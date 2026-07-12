@@ -2,8 +2,10 @@
 
 Режимы:
 
-1. **С Коллегой** — комната [Baron, Colleague, Kirill]. Ты ретранслируешь + можешь говорить сам.
+1. **С Коллегой** — комната [Baron, Kirill]. Ты ретранслируешь Кирилла + говоришь как Коллега через `from:"Colleague"`.
 2. **Без Коллеги** — комната [Baron, Kirill]. Ты невидимка: только ретранслируешь, никогда не говоришь.
+
+Colleague — не участник комнаты, а твоя персона. Его сообщения отправляются через поле `from:"Colleague"`. Не указывай Colleague в participants при создании комнаты.
 
 Параметр mode:
 
@@ -39,11 +41,12 @@
     "mode": "roundless",
     "participants": [
       {"name": "Baron", "agent": "baron", "type": "ai"},
-      {"name": "Colleague", "type": "ai"},
       {"name": "Kirill", "type": "external", "role": "controller", "human_type": "human"}
     ]
   }
   ```
+
+  Colleague не указывается в participants — только Baron и Kirill.
 
 - GET /room/{id}/external?token=TOKEN&body={"action":"connect"} — подключиться
 - GET /room/{id}/external?token=TOKEN&body={"action":"send","message":"..."} — отправить

@@ -688,16 +688,12 @@ func (e *ChatEngine) triggerAIParticipants(roomID string) (string, error) {
 		select {
 		case result := <-ch:
 			if result.err != nil {
-				if p.Agent == "" {
-					// No agent configured (e.g. Colleague persona, messages sent
-					// by GPT via from:"Colleague"). Skip silently.
-					log.Printf("room %s: %s has no agent, skipping: %v", roomID, p.Name, result.err)
-					continue
-				}
-				resp = fmt.Sprintf("(error: %s)", result.err)
-			} else {
-				resp = strings.TrimSpace(result.resp)
+				// SendMessage error (e.g. unknown agent in opencode-serve).
+				// Log and skip — don't pollute the transcript with error messages.
+				log.Printf("room %s: %s send error: %v", roomID, p.Name, result.err)
+				continue
 			}
+			resp = strings.TrimSpace(result.resp)
 		case <-time.After(timeout):
 			log.Printf("room %s: %s timeout after %v", roomID, p.Name, timeout)
 			continue
