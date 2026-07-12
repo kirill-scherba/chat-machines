@@ -100,8 +100,20 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 		log.Printf("external: room=%s participant=%s action=%s", roomID, p.Name, body.Action)
 
 		switch body.Action {
-		case "connect", "get":
+		case "connect":
 			renderExternalResponse(w, engine, roomID, p, baseURL, body.Since)
+			if snap, ok := engine.GetRoomSnapshot(roomID); ok {
+				engine.store.UpdateParticipantLastSince(roomID, p.Name, len(snap.Messages))
+			}
+		case "get":
+			since := body.Since
+			if since == 0 {
+				since = p.lastSince
+			}
+			renderExternalResponse(w, engine, roomID, p, baseURL, since)
+			if snap, ok := engine.GetRoomSnapshot(roomID); ok {
+				engine.store.UpdateParticipantLastSince(roomID, p.Name, len(snap.Messages))
+			}
 		case "send":
 			if body.Messages == nil {
 				// Single message (backward compatible).
@@ -128,9 +140,12 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 					}
 					engine.WaitForRoundAdvance(roomID, roundBefore, p.Name, 30*time.Second)
 				}
-				renderExternalResponse(w, engine, roomID, p, baseURL, since)
-			} else {
-				// Batch messages: send multiple in one call.
+			renderExternalResponse(w, engine, roomID, p, baseURL, since)
+			if snap, ok := engine.GetRoomSnapshot(roomID); ok {
+				engine.store.UpdateParticipantLastSince(roomID, p.Name, len(snap.Messages))
+			}
+		} else {
+			// Batch messages: send multiple in one call.
 				if len(body.Messages) == 0 {
 					http.Error(w, `{"error":"messages array is empty"}`, http.StatusBadRequest)
 					return
@@ -183,8 +198,11 @@ func ExternalHandler(engine *ChatEngine, baseURL string) http.Handler {
 					}
 					engine.WaitForRoundAdvance(roomID, roundBefore, p.Name, 30*time.Second)
 				}
-				renderExternalResponse(w, engine, roomID, p, baseURL, since)
+			renderExternalResponse(w, engine, roomID, p, baseURL, since)
+			if snap, ok := engine.GetRoomSnapshot(roomID); ok {
+				engine.store.UpdateParticipantLastSince(roomID, p.Name, len(snap.Messages))
 			}
+		}
 		case "stop":
 			snap, ok := engine.GetRoomSnapshot(roomID)
 			if !ok {

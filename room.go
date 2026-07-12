@@ -37,8 +37,9 @@ type Participant struct {
 	HumanType string // "human" or "human+agent" (external only)
 
 	// Internal fields, not serialized:
-	token string        // UUID for external endpoint authentication
-	ready chan struct{} // buffered (cap 1), signalled when external sends a message
+	token     string        // UUID for external endpoint authentication
+	ready     chan struct{} // buffered (cap 1), signalled when external sends a message
+	lastSince int           // last seen message count for delta responses
 }
 
 // Message is a single round entry.
@@ -419,6 +420,22 @@ func (s *RoomStore) FindExternalParticipantByToken(roomID, token string) (Partic
 		}
 	}
 	return Participant{}, false
+}
+
+// UpdateParticipantLastSince sets the last seen message count for an external participant.
+func (s *RoomStore) UpdateParticipantLastSince(roomID, name string, since int) {
+	r := s.GetRoom(roomID)
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.Participants {
+		if r.Participants[i].Name == name {
+			r.Participants[i].lastSince = since
+			return
+		}
+	}
 }
 
 // GetExternalResponse returns and clears the latest response text for an external
