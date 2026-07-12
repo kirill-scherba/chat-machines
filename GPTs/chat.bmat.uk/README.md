@@ -28,9 +28,11 @@ in multi-participant chat rooms alongside Baron (the main AI) and others.
 The GPT uses two endpoints:
 
 ### POST /room/create (requires Bearer API key)
+
 Creates a new chat room. Returns `room_id` and `external_urls` with per-participant tokens.
 
 ### GET /room/{id}/external (uses room token)
+
 - `connect` — join a room (returns skill prompt + room state)
 - `send` — post a message, waits for AI reply, returns delta
 - `get` — check for new messages (supports `since` param for delta)
