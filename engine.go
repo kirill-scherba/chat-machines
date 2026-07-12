@@ -646,8 +646,8 @@ func (e *ChatEngine) RoundlessSendAI(roomID string) (string, error) {
 	return e.triggerAIParticipants(roomID)
 }
 
-// triggerAIParticipants sends the current transcript to all AI participants
-// and collects their responses with an 8-second timeout per AI.
+// triggerAIParticipants sends new (delta) messages since last trigger to all AI
+// participants and collects their responses with a 20-second timeout per AI.
 func (e *ChatEngine) triggerAIParticipants(roomID string) (string, error) {
 	// Find AI participants and collect their sessions.
 	snap := e.store.GetRoom(roomID)
@@ -657,13 +657,43 @@ func (e *ChatEngine) triggerAIParticipants(roomID string) (string, error) {
 	snap.mu.RLock()
 	participants := make([]Participant, len(snap.Participants))
 	copy(participants, snap.Participants)
-	allMsgs := make([]Message, len(snap.Messages))
-	copy(allMsgs, snap.Messages)
+	totalMsgs := len(snap.Messages)
+	from := snap.lastTriggerMsgCount
+	if from < 0 {
+		from = 0
+	}
+	newMsgs := make([]Message, 0, totalMsgs-from)
+	for i := from; i < totalMsgs; i++ {
+		newMsgs = append(newMsgs, snap.Messages[i])
+	}
 	currentRound := snap.CurrentRound
 	snap.mu.RUnlock()
 
-	// Build transcript for AI participants.
-	transcript := buildTranscriptFromMessages(allMsgs, participants)
+	// Build transcript from new messages only (session history covers the rest).
+	var transcript string
+	if from == 0 && totalMsgs > 0 {
+		// First trigger: include header with full context.
+		transcript = buildTranscriptFromMessages(newMsgs, participants)
+	} else if len(newMsgs) > 0 {
+		// Delta trigger: label as new messages.
+		var b strings.Builder
+		b.WriteString("New messages:\n")
+		for _, m := range newMsgs {
+			if m.From != "" {
+				fmt.Fprintf(&b, "%s: %s\n", m.From, m.Text)
+			}
+		}
+		transcript = b.String()
+	} else {
+		transcript = ""
+	}
+
+	// Update last trigger count.
+	if room := e.store.GetRoom(roomID); room != nil {
+		room.mu.Lock()
+		room.lastTriggerMsgCount = totalMsgs
+		room.mu.Unlock()
+	}
 
 	// Send to each AI participant and collect responses with 20s timeout.
 	var responses []string

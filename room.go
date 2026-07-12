@@ -65,6 +65,9 @@ type Room struct {
 
 	// okRounds tracks how many consecutive full-OK rounds happened.
 	okRounds int
+	// lastTriggerMsgCount is the message count at the last AI trigger in roundless mode.
+	// Used to send only new messages (delta) to AI participants.
+	lastTriggerMsgCount int
 
 	// AdjunctSessionID is the opencode-serve session ID of the human adjunct,
 	// if any. Empty means no human is currently joined.
