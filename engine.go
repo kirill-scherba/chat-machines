@@ -665,9 +665,9 @@ func (e *ChatEngine) triggerAIParticipants(roomID string) (string, error) {
 	// Build transcript for AI participants.
 	transcript := buildTranscriptFromMessages(allMsgs, participants)
 
-	// Send to each AI participant and collect responses with 8s timeout.
+	// Send to each AI participant and collect responses with 20s timeout.
 	var responses []string
-	timeout := 8 * time.Second
+	timeout := 20 * time.Second
 	for _, p := range participants {
 		if p.IsExternal() || p.SessionID == "" {
 			continue

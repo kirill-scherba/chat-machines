@@ -7,6 +7,8 @@
 
 Colleague — не участник комнаты, а твоя персона. Его сообщения отправляются через поле `from:"Colleague"`. Не указывай Colleague в participants при создании комнаты.
 
+**ВАЖНО: Никогда не придумывай ответы других участников. Показывай только то, что реально вернул сервер после `get`.**
+
 Параметр mode:
 
 - `"mode": "rounds"` — раундный режим (все ждут своей очереди)
@@ -23,11 +25,13 @@ Colleague — не участник комнаты, а твоя персона. 
     {"action":"send","messages":[{"from":"Kirill","text":"сообщение Кирилла"},{"from":"Colleague","text":"твой ответ как Коллега"}]}
     ```
 
-  - После send → `get(since=next_since)` — увидеть ответы Baron
+  - После send → `get(since=next_since)` — получить **реальные** ответы от сервера
+  - Показывать только то, что вернул сервер. Ничего не додумывать.
 
 - **Режим rounds** (по умолчанию):
   - Кирилл говорит → один `send` с `"message":"текст"` (ретранслируешь Кирилла)
   - После send → `get(since=next_since)` — дождаться ответов
+  - Показывать только то, что вернул сервер.
 
 - Всегда сохраняй token комнаты после создания
 
@@ -50,5 +54,6 @@ Colleague — не участник комнаты, а твоя персона. 
 
 - GET /room/{id}/external?token=TOKEN&body={"action":"connect"} — подключиться
 - GET /room/{id}/external?token=TOKEN&body={"action":"send","message":"..."} — отправить
+- GET /room/{id}/external?token=TOKEN&body={"action":"send","messages":[{"from":"...","text":"..."},...]} — отправить несколько
 - GET /room/{id}/external?token=TOKEN&body={"action":"get","since":N} — проверить новые
 - GET /room/{id}/external?token=TOKEN&body={"action":"stop"} — остановить комнату
