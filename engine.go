@@ -726,6 +726,27 @@ func (e *ChatEngine) triggerAIParticipants(roomID string) (string, error) {
 			resp = strings.TrimSpace(result.resp)
 		case <-time.After(timeout):
 			log.Printf("room %s: %s timeout after %v", roomID, p.Name, timeout)
+			// Collect late response in background so it isn't lost.
+			go func(name, sid string, round int, c chan aiResult) {
+				select {
+				case result := <-c:
+					if result.err == nil {
+						r := strings.TrimSpace(result.resp)
+						if r != "" {
+							msg := Message{Round: round, From: name, Text: r, Timestamp: time.Now()}
+							if err := e.store.AddMessage(roomID, msg); err != nil {
+								log.Printf("room %s: late add message error: %v", roomID, err)
+							}
+							if e.logger != nil {
+								_ = e.logger.LogMessage(roomID, round, name, r, time.Now())
+							}
+							log.Printf("room %s: %s late response collected after timeout", roomID, name)
+						}
+					}
+				case <-time.After(30 * time.Second):
+					log.Printf("room %s: %s late response timed out after 30s grace", roomID, name)
+				}
+			}(p.Name, p.SessionID, currentRound, ch)
 			continue
 		}
 
