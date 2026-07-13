@@ -1,0 +1,15 @@
+[Unit]
+Description=Chat Machines — Multi-AI chat rooms with MCP management
+Documentation=https://github.com/kirill-scherba/chat-machines
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/chat-machines-run.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
