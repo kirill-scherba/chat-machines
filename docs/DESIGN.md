@@ -156,6 +156,8 @@ When an adjunct is active, the engine pauses at the end of each round after coll
 
 **Rationale:** The buffered channel avoids polling latency/CPU waste, absorbs the race where the human sends a message before the engine reaches its wait select, and naturally handles multiple human messages per round (only the first signal is needed). Watching the context in the same select preserves the existing prompt shutdown semantics.
 
+**WaitForRoundAdvance:** When a human or external participant sends a message, `WaitForRoundAdvance` polls until **all** expected non-sender participants have responded at the target round. The expected count is `len(Participants)` when the sender is an adjunct, or `len(Participants)-1` when the sender is a participant. It searches the post-increment round (`roundBefore+1`) for normal rounds and also the pre-increment round (`roundBefore`) when the room stops, so the final-reply round is captured. Timeout markers and OK responses count because their `From` field matches the participant name.
+
 **Round counting:** `CurrentRound` is incremented at the **end** of `runRound()`, after the adjunct has spoken (or timed out). This ensures a round is considered complete only when **all participants** (AI + human) have contributed.
 
 **Final reply round:** If `CurrentRound` reaches `MaxRounds` and the most recent transcript message is a real human adjunct message (not the synthetic `(adjunct timeout)` marker), the engine runs one additional AI response round (without incrementing the counter) before stopping. This prevents the human's final message from being left unanswered.

@@ -2,7 +2,8 @@
 
 ## Current Phase
 
-**Issue #7 in review** — PR #9 created, awaiting merge.
+**Issue #12 in progress** — implementation complete, PR pending.
+Issues #7, #8 still in review.
 
 ## Active Issues
 
@@ -15,6 +16,7 @@
 | #7 | fix: human as full participant — round cycle must count human reply | 🟣 In review | `bug`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
 | #8 | feat: External Chat Connector (ECC) — HTTP bridge | 🟣 In review | `enhancement`, `plan/draft`, `plan/improve`, `plan/approved`, `act/in-progress`, `act/review` |
 | #9 | PR: fix: human as full participant — count round after everyone speaks (#7) | 🟣 In review | — |
+| #12 | fix: WaitForRoundAdvance returns before all AI participants have responded | 🟡 In progress | `bug`, `chat-machines`, `plan/improve`, `plan/manager_checked`, `plan/approved`, `act/in-progress` |
 
 ## Issue #3 — Implementation Complete
 
@@ -165,8 +167,39 @@ Add External Chat Connector (ECC) — HTTP bridge that lets external AI services
 - `go test ./...` — ✅
 - `go test -race ./...` — ✅
 
+## Issue #12 — Implementation In Progress
+
+### Goal
+
+Fix `WaitForRoundAdvance` so it returns only after ALL AI participants have responded
+in the target round, not after the first one. Also fix the `runFinalReply` edge case
+where final-reply messages are stored at a different round than `WaitForRoundAdvance`
+expects.
+
+### Completed Items
+
+| # | Item | Files | Status |
+|---|---|---|---|
+| 1 | Add `delayingMockAgent` for staggered-response tests | `engine_test.go` | ✅ |
+| 2 | Add `hasAllExpectedResponses` helper | `engine.go` | ✅ |
+| 3 | Rewrite `WaitForRoundAdvance` to wait for all expected responses | `engine.go` | ✅ |
+| 4 | Handle `runFinalReply` edge case (check both `roundBefore` and `roundBefore+1` on room stop) | `engine.go` | ✅ |
+| 5 | Add `TestWaitForRoundAdvanceAllParticipants` with slow responder | `engine_test.go` | ✅ |
+| 6 | Update DESIGN.md and STATUS.md | `docs/*.md` | ✅ |
+
+### Architecture Decisions
+
+- **Unique-name counting**: `map[string]bool` over messages at the target round(s), keyed by `m.From`. Timeout markers count because their `From` field matches the participant name.
+- **Double-round search on stop**: When the room stops mid-wait, check both `roundBefore` (`runFinalReply`) and `roundBefore+1` (normal round).
+- **Sender exclusion**: If `senderName` is in `Participants`, expect `len(Participants)-1` responses. If not (adjunct), expect `len(Participants)`.
+
+### Verification
+
+- `go test -race ./...` — ✅
+
 ## Last Updated
 
+2026-07-14 — Issue #12 implementation complete; tests pass; PR pending.
 2026-07-09 — Issue #8 implemented by Master; PR #10 created and moved to In review.
 2026-07-08 — Issue #3 implemented by Master; PR created and moved to In review.
 2026-07-08 — Issue #5 planned, approved, moved to In progress, and PR #6 created.
