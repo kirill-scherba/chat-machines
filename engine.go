@@ -136,27 +136,58 @@ func (e *ChatEngine) GetRoomSnapshot(id string) (RoomSnapshot, bool) {
 	return e.store.GetSnapshot(id)
 }
 
-// WaitForRoundAdvance polls the room until the round has advanced AND a message
-// from a participant other than senderName appears in the new round.
-// Used by MCP chat_send and ECC so the sender receives the AI response,
-// not just a confirmation that their message was accepted.
+// WaitForRoundAdvance polls the room until the round has advanced AND messages
+// from ALL non-sender participants appear in the new round. It also accounts for
+// the final-reply round (runFinalReply), where AI responses are stored at the
+// pre-increment round number. Used by MCP chat_send and ECC so the sender
+// receives the complete set of AI responses, not just a confirmation that their
+// message was accepted.
 func (e *ChatEngine) WaitForRoundAdvance(roomID string, roundBefore int, senderName string, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		snap, ok := e.GetRoomSnapshot(roomID)
-		if !ok || snap.Status != RoomActive {
+		if !ok {
+			return
+		}
+		if snap.Status != RoomActive {
+			// Room stopped. Check for final-reply messages at the pre-increment
+			// round in case runFinalReply finished the room.
+			if e.hasAllExpectedResponses(snap, roundBefore, senderName) ||
+				e.hasAllExpectedResponses(snap, roundBefore+1, senderName) {
+				return
+			}
 			return
 		}
 		if snap.CurrentRound > roundBefore {
-			// Round advanced — now wait for a non-sender message in the new round.
-			for _, m := range snap.Messages {
-				if m.Round == roundBefore+1 && m.From != senderName {
-					return
-				}
+			if e.hasAllExpectedResponses(snap, roundBefore+1, senderName) {
+				return
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// hasAllExpectedResponses reports whether every expected non-sender participant
+// has at least one message at the given round. If senderName matches a member
+// of snap.Participants, that sender is excluded; otherwise (adjunct), all
+// participants are expected to respond. Timeout markers and OK responses count
+// because their From field matches the participant name.
+func (e *ChatEngine) hasAllExpectedResponses(snap RoomSnapshot, round int, senderName string) bool {
+	expected := len(snap.Participants)
+	for _, p := range snap.Participants {
+		if p.Name == senderName {
+			expected--
+			break
+		}
+	}
+
+	seen := make(map[string]bool)
+	for _, m := range snap.Messages {
+		if m.Round == round && m.From != senderName {
+			seen[m.From] = true
+		}
+	}
+	return len(seen) >= expected
 }
 
 // AddExternalMessage injects a message from an external source (e.g. human) into

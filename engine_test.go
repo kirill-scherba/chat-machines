@@ -122,6 +122,44 @@ func (m *roundAwareMockAgent) SendMessageAsync(sessionID, text, agent, model str
 	return nil
 }
 
+// delayingMockAgent introduces per-session delays into SendMessage. It is used
+// to simulate rooms where one AI participant responds much faster than another,
+// so WaitForRoundAdvance can be tested for waiting on ALL participants instead
+// of returning on the first response.
+type delayingMockAgent struct {
+	delays    map[string]time.Duration // session id -> delay
+	responses map[string]string        // session id -> response text
+	mu        sync.Mutex
+}
+
+func newDelayingMockAgent(delays map[string]time.Duration, responses map[string]string) *delayingMockAgent {
+	return &delayingMockAgent{
+		delays:    delays,
+		responses: responses,
+	}
+}
+
+func (m *delayingMockAgent) CreateSession(name, agent, model, workDir string) (string, error) {
+	return "ses_" + name, nil
+}
+
+func (m *delayingMockAgent) SendMessage(sessionID, text, agent, model string) (string, error) {
+	if d, ok := m.delays[sessionID]; ok {
+		time.Sleep(d)
+	}
+	m.mu.Lock()
+	resp, ok := m.responses[sessionID]
+	m.mu.Unlock()
+	if !ok {
+		return "OK", nil
+	}
+	return resp, nil
+}
+
+func (m *delayingMockAgent) SendMessageAsync(sessionID, text, agent, model string) error {
+	return nil
+}
+
 func TestEngineTwoParticipants(t *testing.T) {
 	responses := map[string]string{
 		"ses_Baron":   "I propose we improve the architecture",
@@ -1077,6 +1115,70 @@ func TestHumanLastMessageNotLost(t *testing.T) {
 
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
+}
+
+// TestWaitForRoundAdvanceAllParticipants verifies that WaitForRoundAdvance
+// does not return until ALL AI participants have responded in the next round.
+func TestWaitForRoundAdvanceAllParticipants(t *testing.T) {
+	agent := newDelayingMockAgent(
+		map[string]time.Duration{
+			"ses_Baron":   0,
+			"ses_Manager": 300 * time.Millisecond,
+		},
+		map[string]string{
+			"ses_Baron":   "Baron here",
+			"ses_Manager": "Manager here",
+		},
+	)
+	engine := NewChatEngine(agent)
+	engine.SetRoundDelay(10 * time.Millisecond)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("multi-wait", []ParticipantConfig{
+		{Name: "Baron"},
+		{Name: "Manager"},
+	}, 5, "")
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	// Wait until the engine has completed the initial AI opener round.
+	for {
+		snap, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatal("room gone")
+		}
+		if snap.CurrentRound >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Wait for the full next round. "Kirill" is not a participant, so all
+	// participants (Baron + Manager) are expected to respond.
+	start := time.Now()
+	engine.WaitForRoundAdvance(roomID, 0, "Kirill", 10*time.Second)
+	elapsed := time.Since(start)
+
+	// Must wait at least for the slower participant's delay.
+	if elapsed < 200*time.Millisecond {
+		t.Errorf("WaitForRoundAdvance returned too quickly (%v); expected ≥200ms for slow participant", elapsed)
+	}
+
+	snapAfter, _ := engine.GetRoomSnapshot(roomID)
+	baronFound, managerFound := false, false
+	for _, m := range snapAfter.Messages {
+		if m.Round == 1 && m.From == "Baron" {
+			baronFound = true
+		}
+		if m.Round == 1 && m.From == "Manager" {
+			managerFound = true
+		}
+	}
+	if !baronFound || !managerFound {
+		t.Errorf("expected both Baron and Manager messages at round 1, baron=%v manager=%v",
+			baronFound, managerFound)
+	}
 }
 
 // TestCreateChatRoomWithExternalParticipants verifies that external participants
