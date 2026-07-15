@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Issue #18 in review** — PR #19 implementing agent registry config, MCP resource `chat-machines://agents`, and `chat_ask` loop protection is awaiting review.
+**Issue #18 in review** — PR #19 implementing agent registry config, MCP resource `chat-machines://agents`, `chat_ask` loop protection, and README/Memory Bank sync is awaiting re-review.
 
 ## Active Issues
 
@@ -264,7 +264,7 @@ expects.
 
 ## Last Updated
 
-2026-07-15 — Issue #18 implemented by Master; PR created and moved to In review.
+2026-07-15 — Issue #18 implemented by Master; PR #19 created and moved to In review. README and Memory Bank docs synced with MCP surface.
 2026-07-15 — Issue #14 implemented by Master; PR created and moved to In review.
 2026-07-08 — Issue #3 implemented by Master; PR created and moved to In review.
 2026-07-08 — Issue #5 planned, approved, moved to In progress, and PR #6 created.

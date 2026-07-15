@@ -233,7 +233,14 @@ chat-machines \
 | `chat_leave` | Leave a room as a human adjunct |
 | `chat_stop` | Stop a room and return the summary digest |
 | `chat_stats` | Global chat statistics |
-| `chat_ask` | Ask a single synchronous question to an opencode-serve agent; no room is created |
+| `chat_ask` | Ask a single synchronous question to another agent; no room is created |
+| `chat_display_format` | Return the canonical relay format for human adjunct output |
+
+## MCP Resource Reference
+
+| Resource | Purpose |
+|---|---|
+| `chat-machines://agents` | List of agents available via `chat_ask` with models, specialties, and descriptions |
 
 ### `chat_ask` — Synchronous Agent Question
 
