@@ -102,6 +102,21 @@ func TestAgentClientGetLastResponse(t *testing.T) {
 	}
 }
 
+func TestAgentClientCloseSession(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/session/sid" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	c := NewAgentClient(ts.URL, 5*time.Second)
+	if err := c.CloseSession("sid"); err != nil {
+		t.Fatalf("close session: %v", err)
+	}
+}
+
 func TestSplitModel(t *testing.T) {
 	cases := []struct {
 		in           string

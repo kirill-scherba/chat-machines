@@ -23,6 +23,7 @@ type Agent interface {
 	CreateSession(name, agent, model, workDir string) (string, error)
 	SendMessage(sessionID, text, agent, model string) (string, error)
 	SendMessageAsync(sessionID, text, agent, model string) error
+	CloseSession(sessionID string) error
 }
 
 // ChatEngine manages the lifecycle of all chat rooms.
@@ -643,9 +644,8 @@ func (e *ChatEngine) closeSessions(room *Room) {
 		if p.IsExternal() || p.SessionID == "" {
 			continue
 		}
-		// There is no explicit close endpoint; sessions expire automatically.
-		// We send a polite final message so the agent knows the chat ended.
-		_ = e.agent.SendMessageAsync(p.SessionID, "The chat has ended. Thank you.", p.Agent, p.Model)
+		// Explicitly delete the session on the opencode-serve side.
+		_ = e.agent.CloseSession(p.SessionID)
 	}
 }
 
@@ -905,10 +905,34 @@ func lastMessageIsFromAdjunct(room *Room, adjunctName string) bool {
 	return last.From == adjunctName && last.Text != "(adjunct timeout)"
 }
 
+// buildAskAgentLogPrefix returns a prefix instructing the agent to log the
+// chat_ask call to memory after answering. The prefix is prepended to the
+// user's question before sending it to the agent.
+func buildAskAgentLogPrefix(agentName string, ts time.Time) string {
+	dateStr := ts.UTC().Format("2006-01-02")
+	timeStr := ts.UTC().Format("150405")
+	isoStr := ts.UTC().Format(time.RFC3339)
+
+	return fmt.Sprintf(`[chat_ask]
+After answering, save a brief report to memory via memory_save.
+Key: memory/agent/chat-ask/log/%s/%s/%s
+Format:
+{
+  "timestamp": "%s",
+  "agent": "%s",
+  "caller": "baron (chat_ask)",
+  "question_brief": "<10-20 words about the question>",
+  "response_summary": "<10-20 words summary of the answer>",
+  "tags": ["<topic>"]
+}
+
+Question: `, dateStr, timeStr, agentName, isoStr, agentName)
+}
+
 // AskAgent sends a single synchronous question to an opencode-serve agent
 // and returns its answer. It creates an ephemeral session, sends the question
-// through the blocking SendMessage endpoint, then closes the session with a
-// polite final message. The session is not stored in the RoomStore and no
+// through the blocking SendMessage endpoint, then explicitly closes the session
+// via DELETE /session/{id}. The session is not stored in the RoomStore and no
 // room is created.
 func (e *ChatEngine) AskAgent(agentName, question, model string) (string, error) {
 	if agentName == "" {
@@ -923,14 +947,17 @@ func (e *ChatEngine) AskAgent(agentName, question, model string) (string, error)
 		return "", fmt.Errorf("create session: %w", err)
 	}
 
-	answer, err := e.agent.SendMessage(sessionID, question, agentName, model)
+	// Prepend a memory-logging instruction so the agent can save a report.
+	fullQuestion := buildAskAgentLogPrefix(agentName, time.Now()) + question
+
+	answer, err := e.agent.SendMessage(sessionID, fullQuestion, agentName, model)
 	if err != nil {
-		// Still try to close the session politely; ignore close errors.
-		_ = e.agent.SendMessageAsync(sessionID, "The chat has ended. Thank you.", agentName, model)
+		// Still try to close the session; ignore close errors.
+		_ = e.agent.CloseSession(sessionID)
 		return "", fmt.Errorf("send message: %w", err)
 	}
 
-	_ = e.agent.SendMessageAsync(sessionID, "The chat has ended. Thank you.", agentName, model)
+	_ = e.agent.CloseSession(sessionID)
 	return strings.TrimSpace(answer), nil
 }
 

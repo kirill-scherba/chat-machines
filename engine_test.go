@@ -21,6 +21,8 @@ type mockAgentClient struct {
 	createCalls    int
 	sendCalls      int
 	asyncSendCalls int
+	closeCalls     int
+	sendError      error // when set, SendMessage returns this error
 }
 
 func newMockAgentClient(responses map[string]string) *mockAgentClient {
@@ -43,6 +45,9 @@ func (m *mockAgentClient) SendMessage(sessionID, text, agent, model string) (str
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sendCalls++
+	if m.sendError != nil {
+		return "", m.sendError
+	}
 	resp, ok := m.responses[sessionID]
 	if !ok {
 		return "OK", nil
@@ -61,6 +66,13 @@ func (m *mockAgentClient) SendMessageAsync(sessionID, text, agent, model string)
 	return nil
 }
 
+func (m *mockAgentClient) CloseSession(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closeCalls++
+	return nil
+}
+
 // roundAwareMockAgent returns responses based on how many times each
 // session has been called. Because each participant is contacted once per
 // round, the call count equals the round number. It is used for OK-protocol
@@ -73,6 +85,7 @@ type roundAwareMockAgent struct {
 	mu          sync.Mutex
 	createCalls int
 	sendCalls   int
+	closeCalls  int
 }
 
 func newRoundAwareMockAgent(responses map[string]map[int]string) *roundAwareMockAgent {
@@ -126,6 +139,13 @@ func (m *roundAwareMockAgent) SendMessageAsync(sessionID, text, agent, model str
 	return nil
 }
 
+func (m *roundAwareMockAgent) CloseSession(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closeCalls++
+	return nil
+}
+
 // delayingMockAgent introduces per-session delays into SendMessage. It is used
 // to simulate rooms where one AI participant responds much faster than another,
 // so WaitForRoundAdvance can be tested for waiting on ALL participants instead
@@ -161,6 +181,10 @@ func (m *delayingMockAgent) SendMessage(sessionID, text, agent, model string) (s
 }
 
 func (m *delayingMockAgent) SendMessageAsync(sessionID, text, agent, model string) error {
+	return nil
+}
+
+func (m *delayingMockAgent) CloseSession(sessionID string) error {
 	return nil
 }
 
@@ -1442,9 +1466,8 @@ func TestStartRoomSkipsExternalSessions(t *testing.T) {
 	}
 }
 
-// TestRunFinalReplySkipsExternalParticipants verifies that runFinalReply only
-// appends transcript entries for non-external AI participants and never creates
-// synthetic messages for external participants.
+// TestAskAgent verifies that chat_ask creates a session, sends the question,
+// and explicitly closes the session via CloseSession.
 func TestAskAgent(t *testing.T) {
 	responses := map[string]string{
 		"ses_ask-svetik": "This is a great idea worth exploring",
@@ -1465,6 +1488,7 @@ func TestAskAgent(t *testing.T) {
 	calls := client.createCalls
 	sends := client.sendCalls
 	asyncSends := client.asyncSendCalls
+	closeCalls := client.closeCalls
 	client.mu.Unlock()
 	if calls != 1 {
 		t.Fatalf("expected 1 session creation, got %d", calls)
@@ -1472,8 +1496,11 @@ func TestAskAgent(t *testing.T) {
 	if sends != 1 {
 		t.Fatalf("expected 1 blocking send (question), got %d", sends)
 	}
-	if asyncSends != 1 {
-		t.Fatalf("expected 1 async send (close), got %d", asyncSends)
+	if asyncSends != 0 {
+		t.Fatalf("expected 0 async sends (replaced by CloseSession), got %d", asyncSends)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("expected 1 close call after success, got %d", closeCalls)
 	}
 }
 
@@ -1492,6 +1519,52 @@ func TestAskAgentEmptyQuestion(t *testing.T) {
 
 	if _, err := engine.AskAgent("svetik", "", ""); err == nil {
 		t.Fatal("expected error for empty question")
+	}
+}
+
+// TestAskAgentCloseSessionOnError verifies that AskAgent calls CloseSession
+// even when the blocking SendMessage fails.
+func TestAskAgentCloseSessionOnError(t *testing.T) {
+	client := newMockAgentClient(map[string]string{})
+	client.sendError = fmt.Errorf("simulated send error")
+	engine := NewChatEngine(client)
+	defer engine.StopAll()
+
+	if _, err := engine.AskAgent("svetik", "question", ""); err == nil {
+		t.Fatal("expected error from SendMessage")
+	}
+
+	client.mu.Lock()
+	closeCalls := client.closeCalls
+	asyncSends := client.asyncSendCalls
+	client.mu.Unlock()
+	if closeCalls != 1 {
+		t.Fatalf("expected CloseSession called on error path, got %d close calls", closeCalls)
+	}
+	if asyncSends != 0 {
+		t.Fatalf("expected 0 async sends on error path, got %d", asyncSends)
+	}
+}
+
+// TestBuildAskAgentLogPrefix verifies the memory-logging instruction prefix.
+func TestBuildAskAgentLogPrefix(t *testing.T) {
+	ts := time.Date(2026, 7, 15, 14, 30, 0, 0, time.UTC)
+	prefix := buildAskAgentLogPrefix("svetik", ts)
+
+	if prefix == "" {
+		t.Fatal("expected non-empty prefix")
+	}
+	if !strings.Contains(prefix, "svetik") {
+		t.Errorf("expected agent name in prefix, got %q", prefix)
+	}
+	if !strings.Contains(prefix, "memory/agent/chat-ask/log/2026-07-15/143000/svetik") {
+		t.Errorf("expected key pattern, got %q", prefix)
+	}
+	if !strings.Contains(prefix, "baron (chat_ask)") {
+		t.Errorf("expected caller field, got %q", prefix)
+	}
+	if !strings.Contains(prefix, "Question:") {
+		t.Errorf("expected Question: marker at end of prefix, got %q", prefix)
 	}
 }
 

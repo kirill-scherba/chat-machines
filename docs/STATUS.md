@@ -2,8 +2,8 @@
 
 ## Current Phase
 
-**Issue #14 in review** — PR created, awaiting merge.
-Issues #7, #8, #9, #12 already merged.
+**Issue #16 in progress** — implementing chat_ask session close and memory logging.
+Issue #14 merged; issues #7, #8, #9, #12 already merged.
 
 ## Active Issues
 
@@ -17,7 +17,8 @@ Issues #7, #8, #9, #12 already merged.
 | #8 | feat: External Chat Connector (ECC) — HTTP bridge | ✅ Done (merged) | `enhancement`, `plan/draft`, `plan/improve`, `plan/approved`, `act/in-progress`, `act/review` |
 | #9 | PR: fix: human as full participant — count round after everyone speaks (#7) | ✅ Done (merged) | — |
 | #12 | fix: WaitForRoundAdvance returns before all AI participants have responded | ✅ Done (merged) | `bug`, `chat-machines`, `plan/improve`, `plan/manager_checked`, `plan/approved`, `act/in-progress` |
-| #14 | feat: chat_ask — synchronous agent question | 🟣 In review | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
+| #14 | feat: chat_ask — synchronous agent question | ✅ Done (merged) | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
+| #16 | fix: chat_ask — session closing, logging calls to memory | 🟡 In progress | `enhancement`, `chat-machines`, `plan/improve`, `plan/approved` |
 
 ## Issue #3 — Implementation Complete
 
@@ -120,7 +121,38 @@ Fix adjunct mode so the engine waits for the human participant before finishing 
 - `go test ./...` — ✅
 - `go vet ./...` — ✅
 
-## Issue #14 — Implementation In Review
+## Issue #16 — Implementation In Progress
+
+### Goal
+
+Improve `chat_ask` (#14): explicitly close opencode-serve sessions via `DELETE /session/{id}` and prepend a memory-logging instruction to the question.
+
+### Completed Items
+
+| # | Item | Files | Status |
+|---|---|---|---|
+| 1 | `CloseSession` method in `AgentClient` (HTTP DELETE) | `agent.go` | ✅ |
+| 2 | Extend `Agent` interface with `CloseSession` | `engine.go` | ✅ |
+| 3 | Update `AskAgent` to call `CloseSession` and prepend memory-logging prefix | `engine.go` | ✅ |
+| 4 | Update `closeSessions` to use `CloseSession` instead of async polite message | `engine.go` | ✅ |
+| 5 | Update mocks (`mockAgentClient`, `roundAwareMockAgent`, `delayingMockAgent`) | `engine_test.go` | ✅ |
+| 6 | Tests: `TestAskAgent`, `TestAskAgentCloseSessionOnError`, `TestBuildAskAgentLogPrefix`, `TestAgentClientCloseSession` | `engine_test.go`, `agent_test.go` | ✅ |
+| 7 | Update Memory Bank docs (CONTEXT.md, DESIGN.md, STATUS.md) | `docs/*.md` | ✅ |
+
+### Architecture Decisions
+
+- `CloseSession` is part of the `Agent` interface so integration tests can mock it deterministically.
+- `AgentClient.CloseSession` sends `DELETE /session/{id}` with a 10s timeout and tolerates 200/204/404.
+- `AskAgent` prepends the memory-logging instruction to the question; the agent may save a report to `memory/agent/chat-ask/log/YYYY-MM-DD/HHMMSS/<agent>` if it supports the `memory_save` tool.
+- Room session cleanup (`closeSessions`) uses the same explicit `CloseSession` instead of the previous polite async message workaround.
+
+### Verification
+
+- `go build ./...` — ✅
+- `go vet ./...` — ✅
+- `go test ./...` — ✅
+
+## Issue #14 — Implementation Done (Merged)
 
 ### Goal
 
@@ -142,7 +174,7 @@ Add the `chat_ask` MCP tool for synchronous one-off questions to an opencode-ser
 
 - `chat_ask` reuses the existing `Agent` interface and `AgentClient`; no new HTTP client or transport is introduced.
 - The session name is `ask-<agent>` to make ephemeral sessions distinguishable in opencode-serve logs.
-- `AskAgent` performs one blocking `SendMessage`, then sends an async close message. No room state is mutated.
+- `AskAgent` performs one blocking `SendMessage`, then closes the session. No room state is mutated.
 - Multi-round dialogs are composed by the caller via multiple `chat_ask` calls; v1 does not implement an internal dialog loop.
 
 ### Verification
