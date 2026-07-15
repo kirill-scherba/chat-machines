@@ -34,7 +34,7 @@ func main() {
 	dbPath := flag.String("db", "", "SQLite database path for optional message logging")
 	memoryMCP := flag.String("memory-mcp", "http://127.0.0.1:7708/mcp", "memory-store-mcp URL for saving summaries")
 	autoSave := flag.Bool("auto-save", false, "automatically save digest to memory-store-mcp on chat stop")
-	messageTimeout := flag.Duration("timeout", 120*time.Second, "per-message timeout")
+	messageTimeout := flag.Duration("timeout", 5*time.Minute, "per-message timeout")
 	adjunctTimeout := flag.Duration("adjunct-timeout", 5*time.Minute, "human adjunct response timeout (default: 5m)")
 	apiKey := flag.String("api-key", "", "API key for Bearer auth on /room/create endpoint")
 	logDir := flag.String("log-dir", "", "log output directory (default: stderr only)")
