@@ -2,8 +2,8 @@
 
 ## Current Phase
 
-**Issue #12 in progress** — implementation complete, PR pending.
-Issues #7, #8 still in review.
+**Issue #14 in review** — PR created, awaiting merge.
+Issues #7, #8, #9, #12 already merged.
 
 ## Active Issues
 
@@ -13,10 +13,11 @@ Issues #7, #8 still in review.
 | #3 | feat: chat_send, human participation mode, digest fixes | ✅ Done (merged) | `chat-machines`, `enhancement` |
 | #5 | fix: adjunct mode — human participant must be waited on in round cycle | ✅ Done (merged) | `chat-machines`, `bug`, `plan/approved` |
 | #6 | PR: fix: adjunct mode — wait for human in round cycle (#5) | ✅ Done (merged) | — |
-| #7 | fix: human as full participant — round cycle must count human reply | 🟣 In review | `bug`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
-| #8 | feat: External Chat Connector (ECC) — HTTP bridge | 🟣 In review | `enhancement`, `plan/draft`, `plan/improve`, `plan/approved`, `act/in-progress`, `act/review` |
-| #9 | PR: fix: human as full participant — count round after everyone speaks (#7) | 🟣 In review | — |
-| #12 | fix: WaitForRoundAdvance returns before all AI participants have responded | 🟡 In progress | `bug`, `chat-machines`, `plan/improve`, `plan/manager_checked`, `plan/approved`, `act/in-progress` |
+| #7 | fix: human as full participant — round cycle must count human reply | ✅ Done (merged) | `bug`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
+| #8 | feat: External Chat Connector (ECC) — HTTP bridge | ✅ Done (merged) | `enhancement`, `plan/draft`, `plan/improve`, `plan/approved`, `act/in-progress`, `act/review` |
+| #9 | PR: fix: human as full participant — count round after everyone speaks (#7) | ✅ Done (merged) | — |
+| #12 | fix: WaitForRoundAdvance returns before all AI participants have responded | ✅ Done (merged) | `bug`, `chat-machines`, `plan/improve`, `plan/manager_checked`, `plan/approved`, `act/in-progress` |
+| #14 | feat: chat_ask — synchronous agent question | 🟣 In review | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
 
 ## Issue #3 — Implementation Complete
 
@@ -119,6 +120,38 @@ Fix adjunct mode so the engine waits for the human participant before finishing 
 - `go test ./...` — ✅
 - `go vet ./...` — ✅
 
+## Issue #14 — Implementation In Review
+
+### Goal
+
+Add the `chat_ask` MCP tool for synchronous one-off questions to an opencode-serve agent without creating a chat room.
+
+### Completed Items
+
+| # | Item | Files | Status |
+|---|---|---|---|
+| 1 | `AskAgent` engine method (ephemeral session, blocking send, close) | `engine.go` | ✅ |
+| 2 | `chat_ask` MCP tool registration and handler | `server.go` | ✅ |
+| 3 | Validation and error responses for missing agent/question | `server.go`, `engine.go` | ✅ |
+| 4 | Tests for `AskAgent` with mock agent (success + validation) | `engine_test.go` | ✅ |
+| 5 | MCP-level tests for `chat_ask` result shape and validation | `server_test.go` | ✅ |
+| 6 | Update system instructions to list `chat_ask` | `server.go` | ✅ |
+| 7 | Update Memory Bank docs (DESIGN.md, STATUS.md) | `docs/*.md` | ✅ |
+
+### Architecture Decisions
+
+- `chat_ask` reuses the existing `Agent` interface and `AgentClient`; no new HTTP client or transport is introduced.
+- The session name is `ask-<agent>` to make ephemeral sessions distinguishable in opencode-serve logs.
+- `AskAgent` performs one blocking `SendMessage`, then sends an async close message. No room state is mutated.
+- Multi-round dialogs are composed by the caller via multiple `chat_ask` calls; v1 does not implement an internal dialog loop.
+
+### Verification
+
+- `go build ./...` — ✅
+- `go vet ./...` — ✅
+- `go test ./...` — ✅
+- `go test -race ./...` — ✅
+
 ## Issue #8 — Implementation In Review (PR #10)
 
 ### Goal
@@ -199,8 +232,7 @@ expects.
 
 ## Last Updated
 
-2026-07-14 — Issue #12 implementation complete; tests pass; PR pending.
-2026-07-09 — Issue #8 implemented by Master; PR #10 created and moved to In review.
+2026-07-15 — Issue #14 implemented by Master; PR created and moved to In review.
 2026-07-08 — Issue #3 implemented by Master; PR created and moved to In review.
 2026-07-08 — Issue #5 planned, approved, moved to In progress, and PR #6 created.
 2026-07-08 — PR #6 review feedback addressed: context cancellation, safe rejoin, regression tests, docs sync.
