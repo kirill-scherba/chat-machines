@@ -44,6 +44,8 @@ POST /session/{id}/message              — Send message (blocking, waits for re
 POST /session/{id}/prompt_async         — Send message (non-blocking, returns 204)
 
 GET /session/{id}/message?limit=N      — Read messages from session
+
+DELETE /session/{id}                    — Delete/close session (returns 204 or 404)
 ```
 
 ## Related Projects

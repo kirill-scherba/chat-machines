@@ -181,6 +181,35 @@ func (c *AgentClient) SendMessageAsync(sessionID, text, agent, model string) err
 	return nil
 }
 
+// CloseSession sends DELETE /session/{id} to opencode-serve, releasing the session.
+func (c *AgentClient) CloseSession(sessionID string) error {
+	url := fmt.Sprintf("%s/session/%s", c.baseURL, sessionID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("new request: %w", err)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("close session http: %w", err)
+	}
+	resp.Body.Close()
+
+	// Accept 200, 204, and 404 (already deleted / expired) as success.
+	if resp.StatusCode != http.StatusOK &&
+		resp.StatusCode != http.StatusNoContent &&
+		resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("close session status %d", resp.StatusCode)
+	}
+
+	log.Printf("closed session %s", sessionID)
+	return nil
+}
+
 // GetLastResponse fetches the latest assistant message from a session.
 func (c *AgentClient) GetLastResponse(sessionID string) (string, bool, error) {
 	url := fmt.Sprintf("%s/session/%s/message?limit=1", c.baseURL, sessionID)

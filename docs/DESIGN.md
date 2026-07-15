@@ -173,6 +173,7 @@ type Agent interface {
 	CreateSession(name, agent, model, workDir string) (string, error)
 	SendMessage(sessionID, text, agent, model string) (string, error)
 	SendMessageAsync(sessionID, text, agent, model string) error
+	CloseSession(sessionID string) error
 }
 ```
 
@@ -232,12 +233,15 @@ chat-machines \
 
 ### `chat_ask` — Synchronous Agent Question
 
-`chat_ask(agent, question, model?)` creates an ephemeral opencode-serve session for the named agent, sends a single question through the blocking `POST /session/{id}/message` endpoint, and returns the answer as `{agent, question, answer}`. The session is closed with a polite final message and is not tracked in `RoomStore`. It is intended for quick, one-off queries (e.g. asking Svetik to evaluate an idea) without the overhead of creating a full chat room.
+`chat_ask(agent, question, model?)` creates an ephemeral opencode-serve session for the named agent, sends a single question through the blocking `POST /session/{id}/message` endpoint, and returns the answer as `{agent, question, answer}`. The session is then explicitly closed via `DELETE /session/{id}` and is not tracked in `RoomStore`. It is intended for quick, one-off queries (e.g. asking Svetik to evaluate an idea) without the overhead of creating a full chat room.
+
+Before the question is sent, it is prefixed with an instruction asking the agent to save a brief report to `memory-store-mcp` after answering. The instruction includes the exact memory key pattern (`memory/agent/chat-ask/log/YYYY-MM-DD/HHMMSS/<agent>`) and JSON format. This is a best-effort prompt instruction; the agent may or may not save the report depending on its capabilities.
 
 **Design notes:**
 - Reuses the existing `Agent` interface and `AgentClient` so no new HTTP client is needed.
 - No room, transcript, digest, or summary is created.
 - The caller provides the next question in a follow-up `chat_ask` call; multi-round dialogs are composed by the caller, not the engine.
+- Session cleanup is explicit (`DELETE /session/{id}`) rather than relying on the polite async message workaround.
 
 ## 8. External Chat Connector (ECC)
 
