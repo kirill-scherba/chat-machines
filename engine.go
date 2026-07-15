@@ -905,6 +905,35 @@ func lastMessageIsFromAdjunct(room *Room, adjunctName string) bool {
 	return last.From == adjunctName && last.Text != "(adjunct timeout)"
 }
 
+// AskAgent sends a single synchronous question to an opencode-serve agent
+// and returns its answer. It creates an ephemeral session, sends the question
+// through the blocking SendMessage endpoint, then closes the session with a
+// polite final message. The session is not stored in the RoomStore and no
+// room is created.
+func (e *ChatEngine) AskAgent(agentName, question, model string) (string, error) {
+	if agentName == "" {
+		return "", fmt.Errorf("agent is required")
+	}
+	if question == "" {
+		return "", fmt.Errorf("question is required")
+	}
+
+	sessionID, err := e.agent.CreateSession("ask-"+agentName, agentName, model, "/tmp")
+	if err != nil {
+		return "", fmt.Errorf("create session: %w", err)
+	}
+
+	answer, err := e.agent.SendMessage(sessionID, question, agentName, model)
+	if err != nil {
+		// Still try to close the session politely; ignore close errors.
+		_ = e.agent.SendMessageAsync(sessionID, "The chat has ended. Thank you.", agentName, model)
+		return "", fmt.Errorf("send message: %w", err)
+	}
+
+	_ = e.agent.SendMessageAsync(sessionID, "The chat has ended. Thank you.", agentName, model)
+	return strings.TrimSpace(answer), nil
+}
+
 // ParticipantConfig is the user-provided configuration for a participant.
 type ParticipantConfig struct {
 	Name      string `json:"name"`

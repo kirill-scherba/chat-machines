@@ -15,11 +15,12 @@ import (
 
 // mockAgentClient is an AgentClient that does not make real HTTP calls.
 type mockAgentClient struct {
-	sessions    map[string]string // name -> session id
-	responses   map[string]string // session id -> response text
-	mu          sync.Mutex
-	createCalls int
-	sendCalls   int
+	sessions       map[string]string // name -> session id
+	responses      map[string]string // session id -> response text
+	mu             sync.Mutex
+	createCalls    int
+	sendCalls      int
+	asyncSendCalls int
 }
 
 func newMockAgentClient(responses map[string]string) *mockAgentClient {
@@ -54,6 +55,9 @@ func (m *mockAgentClient) GetLastResponse(sessionID string) (string, bool, error
 }
 
 func (m *mockAgentClient) SendMessageAsync(sessionID, text, agent, model string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.asyncSendCalls++
 	return nil
 }
 
@@ -1437,9 +1441,60 @@ func TestStartRoomSkipsExternalSessions(t *testing.T) {
 		t.Fatalf("expected 1 session creation (Baron only), got %d", calls)
 	}
 }
+
 // TestRunFinalReplySkipsExternalParticipants verifies that runFinalReply only
 // appends transcript entries for non-external AI participants and never creates
 // synthetic messages for external participants.
+func TestAskAgent(t *testing.T) {
+	responses := map[string]string{
+		"ses_ask-svetik": "This is a great idea worth exploring",
+	}
+	client := newMockAgentClient(responses)
+	engine := NewChatEngine(client)
+	defer engine.StopAll()
+
+	answer, err := engine.AskAgent("svetik", "оцени идею", "")
+	if err != nil {
+		t.Fatalf("ask agent: %v", err)
+	}
+	if answer != "This is a great idea worth exploring" {
+		t.Fatalf("expected answer, got %q", answer)
+	}
+
+	client.mu.Lock()
+	calls := client.createCalls
+	sends := client.sendCalls
+	asyncSends := client.asyncSendCalls
+	client.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected 1 session creation, got %d", calls)
+	}
+	if sends != 1 {
+		t.Fatalf("expected 1 blocking send (question), got %d", sends)
+	}
+	if asyncSends != 1 {
+		t.Fatalf("expected 1 async send (close), got %d", asyncSends)
+	}
+}
+
+func TestAskAgentEmptyAgent(t *testing.T) {
+	engine := NewChatEngine(newMockAgentClient(map[string]string{}))
+	defer engine.StopAll()
+
+	if _, err := engine.AskAgent("", "question", ""); err == nil {
+		t.Fatal("expected error for empty agent")
+	}
+}
+
+func TestAskAgentEmptyQuestion(t *testing.T) {
+	engine := NewChatEngine(newMockAgentClient(map[string]string{}))
+	defer engine.StopAll()
+
+	if _, err := engine.AskAgent("svetik", "", ""); err == nil {
+		t.Fatal("expected error for empty question")
+	}
+}
+
 func TestRunFinalReplySkipsExternalParticipants(t *testing.T) {
 	client := newMockAgentClient(map[string]string{
 		"ses_AI": "final reply from AI",

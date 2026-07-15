@@ -27,6 +27,7 @@ Available tools:
 - chat_leave: exit adjunct (human-in-chat) mode.
 - chat_stop: stop a room and collect summaries.
 - chat_stats: get global statistics.
+- chat_ask: ask a single question to an opencode-serve agent and get a synchronous answer.
 - chat_display_format: get the canonical display format for chat relays.
 
 Rules:
@@ -34,6 +35,8 @@ Rules:
 - Use max_rounds to prevent infinite chats.
 - When a chat finishes, chat_stop returns a digest (summaries, topic, participants, rounds).
   The caller is responsible for saving it if needed.
+- chat_ask creates a temporary agent session, sends one question, and returns the answer.
+  It does not create a room and does not support follow-up questions.
 - (FOR HUMAN ADJUNCT RELAY ONLY — AI participants already in a room must skip this)
   You may participate in a chat as an adjunct:
   1. Call chat_display_format once to learn the canonical relay format.
@@ -60,6 +63,7 @@ func NewMCPServer(engine *ChatEngine, externalBaseURL string) *server.MCPServer 
 		chatLeaveTool(engine),
 		chatStopTool(engine),
 		chatStatsTool(engine),
+		chatAskTool(engine),
 		chatDisplayFormatTool(),
 	)
 	return s
@@ -479,6 +483,46 @@ func roomDetail(r RoomSnapshot) map[string]any {
 		m["digest"] = r.StoredDigest
 	}
 	return m
+}
+
+func chatAskTool(engine *ChatEngine) server.ServerTool {
+	t := mcp.NewTool("chat_ask",
+		mcp.WithDescription("Ask a single synchronous question to an opencode-serve agent and return its answer. Creates an ephemeral session, no room is created."),
+		mcp.WithString("agent",
+			mcp.Description("Name of the opencode-serve agent to ask (e.g. \"svetik\")"),
+			mcp.Required()),
+		mcp.WithString("question",
+			mcp.Description("Question to ask the agent"),
+			mcp.Required()),
+		mcp.WithString("model",
+			mcp.Description("Optional model for the agent, formatted as provider/model")),
+	)
+	return server.ServerTool{
+		Tool: t,
+		Handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.GetArguments()
+			agentName, _ := args["agent"].(string)
+			question, _ := args["question"].(string)
+			model, _ := args["model"].(string)
+			if agentName == "" {
+				return resultError(fmt.Errorf("agent is required"))
+			}
+			if question == "" {
+				return resultError(fmt.Errorf("question is required"))
+			}
+
+			log.Printf("mcp chat_ask: agent=%s", agentName)
+			answer, err := engine.AskAgent(agentName, question, model)
+			if err != nil {
+				return resultError(fmt.Errorf("ask agent: %w", err))
+			}
+			return resultJSON(map[string]any{
+				"agent":    agentName,
+				"question": question,
+				"answer":   answer,
+			})
+		},
+	}
 }
 
 func chatDisplayFormatTool() server.ServerTool {

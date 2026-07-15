@@ -228,6 +228,16 @@ chat-machines \
 | `chat_leave` | Leave a room as a human adjunct |
 | `chat_stop` | Stop a room and return the summary digest |
 | `chat_stats` | Global chat statistics |
+| `chat_ask` | Ask a single synchronous question to an opencode-serve agent; no room is created |
+
+### `chat_ask` — Synchronous Agent Question
+
+`chat_ask(agent, question, model?)` creates an ephemeral opencode-serve session for the named agent, sends a single question through the blocking `POST /session/{id}/message` endpoint, and returns the answer as `{agent, question, answer}`. The session is closed with a polite final message and is not tracked in `RoomStore`. It is intended for quick, one-off queries (e.g. asking Svetik to evaluate an idea) without the overhead of creating a full chat room.
+
+**Design notes:**
+- Reuses the existing `Agent` interface and `AgentClient` so no new HTTP client is needed.
+- No room, transcript, digest, or summary is created.
+- The caller provides the next question in a follow-up `chat_ask` call; multi-round dialogs are composed by the caller, not the engine.
 
 ## 8. External Chat Connector (ECC)
 
