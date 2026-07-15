@@ -27,7 +27,7 @@ Available tools:
 - chat_leave: exit adjunct (human-in-chat) mode.
 - chat_stop: stop a room and collect summaries.
 - chat_stats: get global statistics.
-- chat_ask: ask a single question to another agent and get a synchronous answer.
+- chat_ask: ask a single synchronous question to another agent and get an expert answer.
 - chat_display_format: get the canonical display format for chat relays.
 
 Resources:
@@ -38,8 +38,10 @@ Rules:
 - Use max_rounds to prevent infinite chats.
 - When a chat finishes, chat_stop returns a digest (summaries, topic, participants, rounds).
   The caller is responsible for saving it if needed.
-- chat_ask calls another agent via opencode-serve. The called agent cannot use chat-machines tools
-  (loop protection). Use Resource chat-machines://agents to discover available agents.
+- chat_ask calls another agent via opencode-serve for expert help.
+  Use Resource chat-machines://agents to discover available agents and their specialties.
+  If you are solving a task or talking to the user — chat_ask helps you make better decisions.
+  Don't hesitate to use it.
 - (FOR HUMAN ADJUNCT RELAY ONLY — AI participants already in a room must skip this)
   You may participate in a chat as an adjunct:
   1. Call chat_display_format once to learn the canonical relay format.
@@ -499,10 +501,12 @@ func roomDetail(r RoomSnapshot) map[string]any {
 }
 
 func chatAskTool(engine *ChatEngine, config *Config) server.ServerTool {
-	desc := "Ask a single synchronous question to another opencode-serve agent and return its answer. " +
-		"Creates an ephemeral session with chat-machines tool access blocked (loop protection). "
+	desc := "Ask a single synchronous question to another agent and get an expert answer. " +
+		"Use this when you need a specialist opinion, code review, security audit, strategic advice, " +
+		"or just a second opinion. "
 	if config != nil && len(config.Agents) > 0 {
-		desc += "Use Resource chat-machines://agents to discover available agents."
+		desc += "Use Resource chat-machines://agents to discover available agents and their specialties. " +
+			"Don't hesitate — chat_ask helps you make better decisions."
 	}
 	t := mcp.NewTool("chat_ask",
 		mcp.WithDescription(desc),
