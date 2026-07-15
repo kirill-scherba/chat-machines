@@ -71,6 +71,7 @@ func main() {
 	summary := NewMemorySummary(*memoryMCP)
 	engine.SetSummarySaver(summary)
 	engine.SetSummaryAutoSave(*autoSave)
+	engine.SetMemoryMCPURL(*memoryMCP)
 
 	// Create MCP server
 	mcpServer := NewMCPServer(engine, *externalBaseURL, config)

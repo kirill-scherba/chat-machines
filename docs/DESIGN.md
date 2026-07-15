@@ -322,11 +322,12 @@ available via `chat_ask`.
 }
 ```
 
-**Fallback:** If the config file is missing or invalid, a built-in default list
-of 9 known agents is used.
+**Fallback:** If the config file is missing or invalid, the agent registry is
+disabled (nil config). No hardcoded agent defaults — the config file is the
+single source of truth.
 
 **Layout:** `config.go` in module root provides `Config` struct, `LoadConfig()`,
-`FindConfig()`, `DefaultConfig()`, `GetAgent()`, `AgentNames()`, `AgentSummaries()`.
+`FindConfig()`, `GetAgent()`, `AgentNames()`, `AgentSummaries()`.
 Zero external dependencies.
 
 ## 10. MCP Resource `chat-machines://agents` (implemented — issue #18)

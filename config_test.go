@@ -69,24 +69,12 @@ func TestConfigAgentNames(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigContainsKnownAgents(t *testing.T) {
-	cfg := DefaultConfig()
-	if len(cfg.Agents) != 9 {
-		t.Fatalf("expected 9 default agents, got %d", len(cfg.Agents))
-	}
-	for _, name := range []string{"baron", "architect", "master", "guard", "manager", "svetik", "falconer", "stargazer", "merchant"} {
-		if cfg.GetAgent(name) == nil {
-			t.Fatalf("expected default agent %q", name)
-		}
-	}
-}
-
 func TestLoadOrDefaultMissingFile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	cfg := LoadOrDefault(nil)
-	if len(cfg.Agents) != 9 {
-		t.Fatalf("expected default config when file missing, got %d agents", len(cfg.Agents))
+	if cfg != nil {
+		t.Fatalf("expected nil when file missing, got %v", cfg)
 	}
 }
 

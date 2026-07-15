@@ -21,7 +21,7 @@ func TestChatAskToolResult(t *testing.T) {
 	engine := NewChatEngine(newMockAgentClient(responses))
 	defer engine.StopAll()
 
-	srv := NewMCPServer(engine, "", DefaultConfig())
+	srv := NewMCPServer(engine, "", nil)
 	tool := srv.GetTool("chat_ask")
 	if tool == nil {
 		t.Fatal("chat_ask tool not registered")
@@ -73,7 +73,7 @@ func TestChatAskToolValidation(t *testing.T) {
 	engine := NewChatEngine(newMockAgentClient(map[string]string{}))
 	defer engine.StopAll()
 
-	srv := NewMCPServer(engine, "", DefaultConfig())
+	srv := NewMCPServer(engine, "", nil)
 	tool := srv.GetTool("chat_ask")
 	if tool == nil {
 		t.Fatal("chat_ask tool not registered")

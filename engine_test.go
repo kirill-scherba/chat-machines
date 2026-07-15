@@ -1613,28 +1613,6 @@ func TestStartRoomPassesNoPermissions(t *testing.T) {
 	}
 }
 
-// TestBuildAskAgentLogPrefix verifies the memory-logging instruction prefix.
-func TestBuildAskAgentLogPrefix(t *testing.T) {
-	ts := time.Date(2026, 7, 15, 14, 30, 0, 0, time.UTC)
-	prefix := buildAskAgentLogPrefix("svetik", ts)
-
-	if prefix == "" {
-		t.Fatal("expected non-empty prefix")
-	}
-	if !strings.Contains(prefix, "svetik") {
-		t.Errorf("expected agent name in prefix, got %q", prefix)
-	}
-	if !strings.Contains(prefix, "memory/agent/chat-ask/log/2026-07-15/143000/svetik") {
-		t.Errorf("expected key pattern, got %q", prefix)
-	}
-	if !strings.Contains(prefix, "baron (chat_ask)") {
-		t.Errorf("expected caller field, got %q", prefix)
-	}
-	if !strings.Contains(prefix, "Question:") {
-		t.Errorf("expected Question: marker at end of prefix, got %q", prefix)
-	}
-}
-
 func TestRunFinalReplySkipsExternalParticipants(t *testing.T) {
 	client := newMockAgentClient(map[string]string{
 		"ses_AI": "final reply from AI",

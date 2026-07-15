@@ -6,9 +6,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +47,9 @@ type ChatEngine struct {
 	summaryAutoSave bool
 	roundDelay      time.Duration
 	adjunctTimeout  time.Duration
+
+	// memoryMCPURL is the HTTP URL of memory-store-mcp for saving chat_ask logs.
+	memoryMCPURL string
 
 	// active rooms keyed by room id; value is the cancel function for the room goroutine.
 	active map[string]context.CancelFunc
@@ -81,6 +88,81 @@ func (e *ChatEngine) SetLogger(l ChatLogger) {
 // SetSummarySaver sets the summary saver used when a room stops.
 func (e *ChatEngine) SetSummarySaver(s SummarySaver) {
 	e.summary = s
+}
+
+// SetMemoryMCPURL sets the memory-store-mcp HTTP URL for saving chat_ask logs.
+func (e *ChatEngine) SetMemoryMCPURL(url string) {
+	e.memoryMCPURL = url
+}
+
+// saveAskAgentLog saves a chat_ask Q&A pair to memory-store-mcp via direct POST.
+func (e *ChatEngine) saveAskAgentLog(agentName, question, answer string) {
+	ts := time.Now().UTC()
+	dateStr := ts.Format("2006-01-02")
+	timeStr := ts.Format("150405")
+	key := fmt.Sprintf("memory/agent/chat-ask/log/%s/%s/%s", dateStr, timeStr, agentName)
+
+	val := map[string]any{
+		"timestamp":        ts.Format(time.RFC3339),
+		"agent":            agentName,
+		"caller":           "baron (chat_ask)",
+		"question_brief":   truncate(question, 100),
+		"response_summary": truncate(answer, 100),
+	}
+	valueJSON, _ := json.Marshal(val)
+	text := fmt.Sprintf("chat_ask: agent=%q question=%q answer=%q", agentName, question, answer)
+
+	body := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "memory_save",
+			"arguments": map[string]any{
+				"key":   key,
+				"value": string(valueJSON),
+				"text":  text,
+			},
+		},
+		"id": 1,
+	}
+	raw, _ := json.Marshal(body)
+
+	url := e.memoryMCPURL
+	if url == "" {
+		url = "http://127.0.0.1:7708/mcp"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
+	if err != nil {
+		log.Printf("saveAskAgentLog: new request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("saveAskAgentLog: http: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		log.Printf("saveAskAgentLog: status %d: %s", resp.StatusCode, string(b))
+		return
+	}
+	log.Printf("saveAskAgentLog: saved %s", key)
+}
+
+// truncate returns the first n runes of s.
+func truncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
 }
 
 // SetSummaryAutoSave controls whether the engine saves the digest to
@@ -913,30 +995,6 @@ func lastMessageIsFromAdjunct(room *Room, adjunctName string) bool {
 	return last.From == adjunctName && last.Text != "(adjunct timeout)"
 }
 
-// buildAskAgentLogPrefix returns a prefix instructing the agent to log the
-// chat_ask call to memory after answering. The prefix is prepended to the
-// user's question before sending it to the agent.
-func buildAskAgentLogPrefix(agentName string, ts time.Time) string {
-	dateStr := ts.UTC().Format("2006-01-02")
-	timeStr := ts.UTC().Format("150405")
-	isoStr := ts.UTC().Format(time.RFC3339)
-
-	return fmt.Sprintf(`[chat_ask]
-After answering, save a brief report to memory via memory_save.
-Key: memory/agent/chat-ask/log/%s/%s/%s
-Format:
-{
-  "timestamp": "%s",
-  "agent": "%s",
-  "caller": "baron (chat_ask)",
-  "question_brief": "<10-20 words about the question>",
-  "response_summary": "<10-20 words summary of the answer>",
-  "tags": ["<topic>"]
-}
-
-Question: `, dateStr, timeStr, agentName, isoStr, agentName)
-}
-
 // AskAgent sends a single synchronous question to an opencode-serve agent
 // and returns its answer. It creates an ephemeral session, sends the question
 // through the blocking SendMessage endpoint, then explicitly closes the session
@@ -958,10 +1016,7 @@ func (e *ChatEngine) AskAgent(agentName, question, model string) (string, error)
 		return "", fmt.Errorf("create session: %w", err)
 	}
 
-	// Prepend a memory-logging instruction so the agent can save a report.
-	fullQuestion := buildAskAgentLogPrefix(agentName, time.Now()) + question
-
-	answer, err := e.agent.SendMessage(sessionID, fullQuestion, agentName, model)
+	answer, err := e.agent.SendMessage(sessionID, question, agentName, model)
 	if err != nil {
 		// Still try to close the session; ignore close errors.
 		_ = e.agent.CloseSession(sessionID)
@@ -969,7 +1024,12 @@ func (e *ChatEngine) AskAgent(agentName, question, model string) (string, error)
 	}
 
 	_ = e.agent.CloseSession(sessionID)
-	return strings.TrimSpace(answer), nil
+	answer = strings.TrimSpace(answer)
+
+	// Save log to memory-store-mcp (async, best-effort).
+	go e.saveAskAgentLog(agentName, question, answer)
+
+	return answer, nil
 }
 
 // ParticipantConfig is the user-provided configuration for a participant.
