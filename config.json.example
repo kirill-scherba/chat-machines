@@ -2,28 +2,28 @@
   "agents": [
     {
       "name": "baron",
-      "model": "deepseek/deepseek-v4-pro",
+      "model": "deepseek/deepseek-v4-flash",
       "specialty": "универсальный ассистент, управляющий экосистемой",
       "when": "общие вопросы, координация, поиск информации",
       "description": "Baron (Барон) — главный AI-ассистент экосистемы Matrica."
     },
     {
       "name": "architect",
-      "model": "deepseek/deepseek-v4",
+      "model": "deepseek/deepseek-v4-pro",
       "specialty": "архитектурное проектирование",
       "when": "проектирование систем, выбор технологий",
       "description": "Architect (Архитектор) — проектирует системы и выбирает технологии."
     },
     {
       "name": "master",
-      "model": "deepseek/deepseek-v4",
+      "model": "ollama-cloud/kimi-k2.7-code",
       "specialty": "мастер-разработчик, чистый код",
       "when": "написание и рефакторинг кода, тестирование",
       "description": "Master (Мастер) — разработчик, отвечающий за качество кода."
     },
     {
       "name": "guard",
-      "model": "deepseek/deepseek-v4-flash",
+      "model": "openai/gpt-5.5",
       "specialty": "безопасность, проверка рисков",
       "when": "аудит безопасности, проверка уязвимостей",
       "description": "Guard (Страж) — проверяет безопасность и риски."
@@ -44,21 +44,21 @@
     },
     {
       "name": "falconer",
-      "model": "deepseek/deepseek-v4-flash",
+      "model": "deepseek/deepseek-v4-pro",
       "specialty": "поиск и исследование",
       "when": "поиск информации, исследования",
       "description": "Falconer (Сокольничий) — ищет и исследует информацию."
     },
     {
       "name": "stargazer",
-      "model": "deepseek/deepseek-v4-flash",
+      "model": "openai/gpt-5.5",
       "specialty": "стратегия и видение",
       "when": "стратегическое планирование, видение продукта",
       "description": "Stargazer (Звездочёт) — думает о стратегии и будущем."
     },
     {
       "name": "merchant",
-      "model": "deepseek/deepseek-v4-flash",
+      "model": "openai/gpt-5.5",
       "specialty": "бизнес, инвесторы, продажи",
       "when": "бизнес-модель, переговоры, рост",
       "description": "Merchant (Купец) — отвечает за бизнес, инвесторов и рост."
