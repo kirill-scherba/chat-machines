@@ -17,10 +17,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// PermissionRule is a tool access rule for an agent session.
+// Prefix is a glob-style pattern matching MCP tool names (e.g. "chat-machines*").
+// Deny=true blocks matching tools; Deny=false allows them.
+type PermissionRule struct {
+	Prefix string `json:"prefix"`
+	Deny   bool   `json:"deny"`
+}
+
 // Agent is the interface for creating sessions and sending/receiving messages.
 // It abstracts the opencode-serve HTTP client so tests can use mocks.
 type Agent interface {
-	CreateSession(name, agent, model, workDir string) (string, error)
+	CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error)
 	SendMessage(sessionID, text, agent, model string) (string, error)
 	SendMessageAsync(sessionID, text, agent, model string) error
 	CloseSession(sessionID string) error
@@ -326,7 +334,7 @@ func (e *ChatEngine) startRoom(room *Room) error {
 			sessionIDs[i] = ""
 			continue
 		}
-		sid, err := e.agent.CreateSession(p.Name, p.Agent, p.Model, workDir)
+		sid, err := e.agent.CreateSession(p.Name, p.Agent, p.Model, workDir, nil)
 		if err != nil {
 			return fmt.Errorf("create session for %s: %w", p.Name, err)
 		}
@@ -942,7 +950,10 @@ func (e *ChatEngine) AskAgent(agentName, question, model string) (string, error)
 		return "", fmt.Errorf("question is required")
 	}
 
-	sessionID, err := e.agent.CreateSession("ask-"+agentName, agentName, model, "/tmp")
+	denyPerms := []PermissionRule{
+		{Prefix: "chat-machines*", Deny: true},
+	}
+	sessionID, err := e.agent.CreateSession("ask-"+agentName, agentName, model, "/tmp", denyPerms)
 	if err != nil {
 		return "", fmt.Errorf("create session: %w", err)
 	}

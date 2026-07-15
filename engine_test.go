@@ -23,6 +23,7 @@ type mockAgentClient struct {
 	asyncSendCalls int
 	closeCalls     int
 	sendError      error // when set, SendMessage returns this error
+	lastPerms      []PermissionRule
 }
 
 func newMockAgentClient(responses map[string]string) *mockAgentClient {
@@ -32,10 +33,11 @@ func newMockAgentClient(responses map[string]string) *mockAgentClient {
 	}
 }
 
-func (m *mockAgentClient) CreateSession(name, agent, model, workDir string) (string, error) {
+func (m *mockAgentClient) CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.createCalls++
+	m.lastPerms = permissions
 	sid := "ses_" + name
 	m.sessions[name] = sid
 	return sid, nil
@@ -97,7 +99,7 @@ func newRoundAwareMockAgent(responses map[string]map[int]string) *roundAwareMock
 	}
 }
 
-func (m *roundAwareMockAgent) CreateSession(name, agent, model, workDir string) (string, error) {
+func (m *roundAwareMockAgent) CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.createCalls++
@@ -163,7 +165,7 @@ func newDelayingMockAgent(delays map[string]time.Duration, responses map[string]
 	}
 }
 
-func (m *delayingMockAgent) CreateSession(name, agent, model, workDir string) (string, error) {
+func (m *delayingMockAgent) CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error) {
 	return "ses_" + name, nil
 }
 
@@ -1543,6 +1545,71 @@ func TestAskAgentCloseSessionOnError(t *testing.T) {
 	}
 	if asyncSends != 0 {
 		t.Fatalf("expected 0 async sends on error path, got %d", asyncSends)
+	}
+}
+
+// TestAskAgentDeniesChatMachinesTools verifies that chat_ask passes a deny
+// permission rule for chat-machines tools to CreateSession.
+func TestAskAgentDeniesChatMachinesTools(t *testing.T) {
+	responses := map[string]string{
+		"ses_ask-svetik": "This is a great idea worth exploring",
+	}
+	client := newMockAgentClient(responses)
+	engine := NewChatEngine(client)
+	defer engine.StopAll()
+
+	answer, err := engine.AskAgent("svetik", "оцени идею", "")
+	if err != nil {
+		t.Fatalf("ask agent: %v", err)
+	}
+	if answer != "This is a great idea worth exploring" {
+		t.Fatalf("expected answer, got %q", answer)
+	}
+
+	client.mu.Lock()
+	lastPerms := client.lastPerms
+	client.mu.Unlock()
+
+	if len(lastPerms) != 1 {
+		t.Fatalf("expected 1 permission rule, got %d", len(lastPerms))
+	}
+	if lastPerms[0].Prefix != "chat-machines*" {
+		t.Fatalf("expected prefix chat-machines*, got %q", lastPerms[0].Prefix)
+	}
+	if !lastPerms[0].Deny {
+		t.Fatal("expected deny=true for chat-machines tools")
+	}
+}
+func TestStartRoomPassesNoPermissions(t *testing.T) {
+	responses := map[string]string{"ses_A": "hello"}
+	client := newMockAgentClient(responses)
+	engine := NewChatEngine(client)
+	defer engine.StopAll()
+
+	roomID, err := engine.CreateChatRoom("room no perms", []ParticipantConfig{
+		{Name: "A"},
+	}, 1, "")
+	if err != nil {
+		t.Fatalf("create chat room: %v", err)
+	}
+
+	// Wait for room to finish so startRoom and runRound complete.
+	for i := 0; i < 50; i++ {
+		snap, ok := engine.GetRoomSnapshot(roomID)
+		if !ok {
+			t.Fatalf("room not found")
+		}
+		if snap.Status == RoomStopped {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	client.mu.Lock()
+	lastPerms := client.lastPerms
+	client.mu.Unlock()
+	if lastPerms != nil {
+		t.Fatalf("expected nil permissions for normal room start, got %v", lastPerms)
 	}
 }
 
