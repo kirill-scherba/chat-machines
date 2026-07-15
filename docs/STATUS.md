@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Issue #18 in progress** — implementing agent registry config, MCP resource `chat-machines://agents`, and `chat_ask` loop protection.
+**Issue #18 in review** — PR #19 implementing agent registry config, MCP resource `chat-machines://agents`, and `chat_ask` loop protection is awaiting review.
 
 ## Active Issues
 
@@ -18,7 +18,7 @@
 | #12 | fix: WaitForRoundAdvance returns before all AI participants have responded | ✅ Done (merged) | `bug`, `chat-machines`, `plan/improve`, `plan/manager_checked`, `plan/approved`, `act/in-progress` |
 | #14 | feat: chat_ask — synchronous agent question | ✅ Done (merged) | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
 | #16 | fix: chat_ask — session closing, logging calls to memory | ✅ Done (merged) | `enhancement`, `chat-machines`, `plan/improve`, `plan/approved` |
-| #18 | feat: agent registry config, MCP resource, and chat_ask loop protection | 🟡 In Progress | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress` |
+| #18 | feat: agent registry config, MCP resource, and chat_ask loop protection | 🟣 In review (PR #19) | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
 
 ## Issue #3 — Implementation Complete
 

@@ -1548,7 +1548,8 @@ func TestAskAgentCloseSessionOnError(t *testing.T) {
 	}
 }
 
-// TestBuildAskAgentLogPrefix verifies the memory-logging instruction prefix.
+// TestAskAgentDeniesChatMachinesTools verifies that chat_ask passes a deny
+// permission rule for chat-machines tools to CreateSession.
 func TestAskAgentDeniesChatMachinesTools(t *testing.T) {
 	responses := map[string]string{
 		"ses_ask-svetik": "This is a great idea worth exploring",

@@ -174,7 +174,7 @@ When an adjunct is active, the engine pauses at the end of each round after coll
 
 ```go
 type Agent interface {
-	CreateSession(name, agent, model, workDir string) (string, error)
+	CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error)
 	SendMessage(sessionID, text, agent, model string) (string, error)
 	SendMessageAsync(sessionID, text, agent, model string) error
 	CloseSession(sessionID string) error
@@ -294,7 +294,7 @@ synthetic transcript entries.
 - Existing rooms, tests, and callers work without changes.
 - External endpoint is optional: disabled when `--external-addr` is empty.
 
-### 9. Agent Registry Config (implemented — issue #18)
+## 9. Agent Registry Config (implemented — issue #18)
 
 Agent metadata (name, model, specialty, when to use, description) is loaded from
 `~/.config/chat-machines/config.json`. The config file defines which agents are
@@ -322,14 +322,14 @@ of 9 known agents is used.
 `FindConfig()`, `DefaultConfig()`, `GetAgent()`, `AgentNames()`, `AgentSummaries()`.
 Zero external dependencies.
 
-### 10. MCP Resource `chat-machines://agents` (implemented — issue #18)
+## 10. MCP Resource `chat-machines://agents` (implemented — issue #18)
 
 The MCP server exposes an `agents` resource at `chat-machines://agents`. Agents
 with chat-machines MCP connected can read this resource to discover who is
 available via `chat_ask`. The resource returns the agent list from config.json
 as structured JSON via the `AgentSummaries()` helper.
 
-### 11. chat_ask Loop Protection (implemented — issue #18)
+## 11. chat_ask Loop Protection (implemented — issue #18)
 
 When `chat_ask` creates a session, it passes a deny rule for `chat-machines*`
 tool prefix to `POST /session`. This prevents the called agent from recursively
