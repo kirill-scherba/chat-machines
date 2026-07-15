@@ -27,16 +27,19 @@ Available tools:
 - chat_leave: exit adjunct (human-in-chat) mode.
 - chat_stop: stop a room and collect summaries.
 - chat_stats: get global statistics.
-- chat_ask: ask a single question to an opencode-serve agent and get a synchronous answer.
+- chat_ask: ask a single question to another agent and get a synchronous answer.
 - chat_display_format: get the canonical display format for chat relays.
+
+Resources:
+- chat-machines://agents: list of agents available via chat_ask with their models, specialties, and when to use them.
 
 Rules:
 - Each participant must have a unique name.
 - Use max_rounds to prevent infinite chats.
 - When a chat finishes, chat_stop returns a digest (summaries, topic, participants, rounds).
   The caller is responsible for saving it if needed.
-- chat_ask creates a temporary agent session, sends one question, and returns the answer.
-  It does not create a room and does not support follow-up questions.
+- chat_ask calls another agent via opencode-serve. The called agent cannot use chat-machines tools
+  (loop protection). Use Resource chat-machines://agents to discover available agents.
 - (FOR HUMAN ADJUNCT RELAY ONLY — AI participants already in a room must skip this)
   You may participate in a chat as an adjunct:
   1. Call chat_display_format once to learn the canonical relay format.
@@ -49,8 +52,8 @@ Rules:
   8. chat_leave(room_id) when done.
 `
 
-// NewMCPServer creates and registers all chat-machines MCP tools.
-func NewMCPServer(engine *ChatEngine, externalBaseURL string) *server.MCPServer {
+// NewMCPServer creates and registers all chat-machines MCP tools and resources.
+func NewMCPServer(engine *ChatEngine, externalBaseURL string, config *Config) *server.MCPServer {
 	s := server.NewMCPServer("chat-machines", "1.0.0",
 		server.WithInstructions(systemInstructions))
 
@@ -63,9 +66,19 @@ func NewMCPServer(engine *ChatEngine, externalBaseURL string) *server.MCPServer 
 		chatLeaveTool(engine),
 		chatStopTool(engine),
 		chatStatsTool(engine),
-		chatAskTool(engine),
+		chatAskTool(engine, config),
 		chatDisplayFormatTool(),
 	)
+
+	if config != nil {
+		s.AddResource(mcp.Resource{
+			URI:         "chat-machines://agents",
+			Name:        "Agent Registry",
+			Description: "List of agents available via chat_ask",
+			MIMEType:    "application/json",
+		}, agentsResourceHandler(config))
+	}
+
 	return s
 }
 
@@ -485,9 +498,14 @@ func roomDetail(r RoomSnapshot) map[string]any {
 	return m
 }
 
-func chatAskTool(engine *ChatEngine) server.ServerTool {
+func chatAskTool(engine *ChatEngine, config *Config) server.ServerTool {
+	desc := "Ask a single synchronous question to another opencode-serve agent and return its answer. " +
+		"Creates an ephemeral session with chat-machines tool access blocked (loop protection). "
+	if config != nil && len(config.Agents) > 0 {
+		desc += "Use Resource chat-machines://agents to discover available agents."
+	}
 	t := mcp.NewTool("chat_ask",
-		mcp.WithDescription("Ask a single synchronous question to an opencode-serve agent and return its answer. Creates an ephemeral session, no room is created."),
+		mcp.WithDescription(desc),
 		mcp.WithString("agent",
 			mcp.Description("Name of the opencode-serve agent to ask (e.g. \"svetik\")"),
 			mcp.Required()),
@@ -571,6 +589,26 @@ Example:
 [Мастер]
 Здорóво. Смотрю твой последний PR, есть пара замечаний.`), nil
 		},
+	}
+}
+
+// agentsResourceHandler returns the agent registry as a JSON resource.
+func agentsResourceHandler(config *Config) server.ResourceHandlerFunc {
+	return func(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		payload := map[string]any{
+			"agents": config.AgentSummaries(),
+		}
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal agents: %w", err)
+		}
+		return []mcp.ResourceContents{
+			mcp.TextResourceContents{
+				URI:      "chat-machines://agents",
+				MIMEType: "application/json",
+				Text:     string(b),
+			},
+		}, nil
 	}
 }
 

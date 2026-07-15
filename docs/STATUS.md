@@ -2,8 +2,7 @@
 
 ## Current Phase
 
-**Issue #16 in progress** — implementing chat_ask session close and memory logging.
-Issue #14 merged; issues #7, #8, #9, #12 already merged.
+**Issue #18 in progress** — implementing agent registry config, MCP resource `chat-machines://agents`, and `chat_ask` loop protection.
 
 ## Active Issues
 
@@ -18,7 +17,8 @@ Issue #14 merged; issues #7, #8, #9, #12 already merged.
 | #9 | PR: fix: human as full participant — count round after everyone speaks (#7) | ✅ Done (merged) | — |
 | #12 | fix: WaitForRoundAdvance returns before all AI participants have responded | ✅ Done (merged) | `bug`, `chat-machines`, `plan/improve`, `plan/manager_checked`, `plan/approved`, `act/in-progress` |
 | #14 | feat: chat_ask — synchronous agent question | ✅ Done (merged) | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
-| #16 | fix: chat_ask — session closing, logging calls to memory | 🟡 In progress | `enhancement`, `chat-machines`, `plan/improve`, `plan/approved` |
+| #16 | fix: chat_ask — session closing, logging calls to memory | ✅ Done (merged) | `enhancement`, `chat-machines`, `plan/improve`, `plan/approved` |
+| #18 | feat: agent registry config, MCP resource, and chat_ask loop protection | 🟡 In Progress | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress` |
 
 ## Issue #3 — Implementation Complete
 
@@ -264,6 +264,7 @@ expects.
 
 ## Last Updated
 
+2026-07-15 — Issue #18 implemented by Master; PR created and moved to In review.
 2026-07-15 — Issue #14 implemented by Master; PR created and moved to In review.
 2026-07-08 — Issue #3 implemented by Master; PR created and moved to In review.
 2026-07-08 — Issue #5 planned, approved, moved to In progress, and PR #6 created.

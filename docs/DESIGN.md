@@ -47,16 +47,20 @@ chat-machines is a Go application that manages multi-AI chat rooms. Each AI part
 
 ```
 chat-machines/
-├── main.go              # Entrypoint: flags (including --auto-save), MCP server startup, engine init
-├── server.go            # MCP server setup, tool registration, system instructions
+├── main.go              # Entrypoint: flags, config load, MCP server startup, engine init
+├── server.go            # MCP server setup, tool/resource registration, system instructions
 ├── agent.go             # OpenCodeServeClient: HTTP client for opencode-serve
+├── config.go            # Agent registry config loader
+├── config.json.example  # Checked-in example agent registry
 ├── room.go              # Room, Participant, Message, RoomStore, RoomSnapshot, adjunct state
 ├── engine.go            # ChatEngine: round-robin loop, goroutine per room, digest storage
 ├── summary.go           # Digest builder and optional memory-store-mcp saver
 ├── store.go             # Optional SQLite persistence (enabled by --db flag)
 ├── agent_test.go        # Tests for agent client
+├── config_test.go       # Tests for config loader
 ├── room_test.go         # Tests for room store
 ├── engine_test.go       # Tests for chat engine and OK protocol
+├── server_test.go       # Tests for MCP tools/resources
 ├── go.mod / go.sum
 ├── README.md
 └── docs/
@@ -289,6 +293,59 @@ synthetic transcript entries.
 - Empty `Participant.Type` is treated as `"ai"`.
 - Existing rooms, tests, and callers work without changes.
 - External endpoint is optional: disabled when `--external-addr` is empty.
+
+### 9. Agent Registry Config (implemented — issue #18)
+
+Agent metadata (name, model, specialty, when to use, description) is loaded from
+`~/.config/chat-machines/config.json`. The config file defines which agents are
+available via `chat_ask`.
+
+**File format:**
+```json
+{
+  "agents": [
+    {
+      "name": "svetik",
+      "model": "deepseek/deepseek-v4-flash",
+      "specialty": "архитектурный наблюдатель, мера идей",
+      "when": "оценка идей, поиск слабых мест, ревью концепций",
+      "description": "Svetik (Светик) — pure observation agent..."
+    }
+  ]
+}
+```
+
+**Fallback:** If the config file is missing or invalid, a built-in default list
+of 9 known agents is used.
+
+**Layout:** `config.go` in module root provides `Config` struct, `LoadConfig()`,
+`FindConfig()`, `DefaultConfig()`, `GetAgent()`, `AgentNames()`, `AgentSummaries()`.
+Zero external dependencies.
+
+### 10. MCP Resource `chat-machines://agents` (implemented — issue #18)
+
+The MCP server exposes an `agents` resource at `chat-machines://agents`. Agents
+with chat-machines MCP connected can read this resource to discover who is
+available via `chat_ask`. The resource returns the agent list from config.json
+as structured JSON via the `AgentSummaries()` helper.
+
+### 11. chat_ask Loop Protection (implemented — issue #18)
+
+When `chat_ask` creates a session, it passes a deny rule for `chat-machines*`
+tool prefix to `POST /session`. This prevents the called agent from recursively
+calling `chat_ask` or any other chat-machines tool.
+
+**Changes:**
+- `Agent` interface: `CreateSession` gets a `permissions []PermissionRule` parameter
+- `PermissionRule` type: `{Prefix string, Deny bool}` — sent in `POST /session` body
+- `AgentClient.CreateSession`: serializes permissions to JSON
+- `AskAgent`: passes `{Prefix: "chat-machines*", Deny: true}` to deny all chat-machines tools
+- `startRoom`: passes `nil` (normal rooms have no restrictions)
+- All mock agents: signature updated (permissions ignored in mocks)
+
+**Rationale:** Without loop protection, an agent called via `chat_ask` could itself
+call `chat_ask`, creating infinite recursion. The opencode-serve enforces permission
+rules at the tool dispatch level.
 
 ## Future Extensions (not in v1)
 

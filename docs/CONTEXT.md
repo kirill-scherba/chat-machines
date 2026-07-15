@@ -66,3 +66,5 @@ See `DESIGN.md` for full architecture documentation.
 - File names: lowercase, descriptive (room.go, agent.go, engine.go)
 - Exported names: `NewChatEngine`, `Agent`, `RoomStore`
 - Test files: `*_test.go` alongside source
+- Implemented files (issue #18): `config.go` (agent registry), `config_test.go`, `config.json.example`
+- Agent interface: `CreateSession` now accepts `permissions []PermissionRule` for loop protection

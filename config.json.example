@@ -1,0 +1,67 @@
+{
+  "agents": [
+    {
+      "name": "baron",
+      "model": "deepseek/deepseek-v4-pro",
+      "specialty": "универсальный ассистент, управляющий экосистемой",
+      "when": "общие вопросы, координация, поиск информации",
+      "description": "Baron (Барон) — главный AI-ассистент экосистемы Matrica."
+    },
+    {
+      "name": "architect",
+      "model": "deepseek/deepseek-v4",
+      "specialty": "архитектурное проектирование",
+      "when": "проектирование систем, выбор технологий",
+      "description": "Architect (Архитектор) — проектирует системы и выбирает технологии."
+    },
+    {
+      "name": "master",
+      "model": "deepseek/deepseek-v4",
+      "specialty": "мастер-разработчик, чистый код",
+      "when": "написание и рефакторинг кода, тестирование",
+      "description": "Master (Мастер) — разработчик, отвечающий за качество кода."
+    },
+    {
+      "name": "guard",
+      "model": "deepseek/deepseek-v4-flash",
+      "specialty": "безопасность, проверка рисков",
+      "when": "аудит безопасности, проверка уязвимостей",
+      "description": "Guard (Страж) — проверяет безопасность и риски."
+    },
+    {
+      "name": "manager",
+      "model": "deepseek/deepseek-v4-flash",
+      "specialty": "менеджер задач и приоритетов",
+      "when": "планирование, приоритизация, статус",
+      "description": "Manager (Менеджер) — следит за задачами и сроками."
+    },
+    {
+      "name": "svetik",
+      "model": "deepseek/deepseek-v4-flash",
+      "specialty": "архитектурный наблюдатель, мера идей",
+      "when": "оценка идей, поиск слабых мест, ревью концепций",
+      "description": "Svetik (Светик) — pure observation agent, оценивает идеи и находит слабые места."
+    },
+    {
+      "name": "falconer",
+      "model": "deepseek/deepseek-v4-flash",
+      "specialty": "поиск и исследование",
+      "when": "поиск информации, исследования",
+      "description": "Falconer (Сокольничий) — ищет и исследует информацию."
+    },
+    {
+      "name": "stargazer",
+      "model": "deepseek/deepseek-v4-flash",
+      "specialty": "стратегия и видение",
+      "when": "стратегическое планирование, видение продукта",
+      "description": "Stargazer (Звездочёт) — думает о стратегии и будущем."
+    },
+    {
+      "name": "merchant",
+      "model": "deepseek/deepseek-v4-flash",
+      "specialty": "бизнес, инвесторы, продажи",
+      "when": "бизнес-модель, переговоры, рост",
+      "description": "Merchant (Купец) — отвечает за бизнес, инвесторов и рост."
+    }
+  ]
+}

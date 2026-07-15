@@ -24,12 +24,56 @@ func TestAgentClientCreateSession(t *testing.T) {
 	defer ts.Close()
 
 	c := NewAgentClient(ts.URL, 5*time.Second)
-	sid, err := c.CreateSession("test", "Baron", "", "")
+	sid, err := c.CreateSession("test", "Baron", "", "", nil)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	if sid != "ses_test123" {
 		t.Fatalf("expected ses_test123, got %s", sid)
+	}
+}
+
+func TestAgentClientCreateSessionWithPermissions(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/session" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(SessionInfo{ID: "ses_perm456", Agent: "Baron"})
+	}))
+	defer ts.Close()
+
+	c := NewAgentClient(ts.URL, 5*time.Second)
+	perms := []PermissionRule{{Prefix: "chat-machines*", Deny: true}}
+	sid, err := c.CreateSession("test", "Baron", "", "", perms)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if sid != "ses_perm456" {
+		t.Fatalf("expected ses_perm456, got %s", sid)
+	}
+
+	rawPerms, ok := gotBody["permissions"]
+	if !ok {
+		t.Fatalf("expected permissions in request body, got %v", gotBody)
+	}
+	permsList, ok := rawPerms.([]any)
+	if !ok || len(permsList) != 1 {
+		t.Fatalf("expected 1 permission rule, got %v", rawPerms)
+	}
+	first, ok := permsList[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected permission object, got %T", permsList[0])
+	}
+	if first["prefix"] != "chat-machines*" {
+		t.Fatalf("expected prefix chat-machines*, got %v", first["prefix"])
+	}
+	if first["deny"] != true {
+		t.Fatalf("expected deny=true, got %v", first["deny"])
 	}
 }
 

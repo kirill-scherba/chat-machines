@@ -21,7 +21,7 @@ func TestChatAskToolResult(t *testing.T) {
 	engine := NewChatEngine(newMockAgentClient(responses))
 	defer engine.StopAll()
 
-	srv := NewMCPServer(engine, "")
+	srv := NewMCPServer(engine, "", DefaultConfig())
 	tool := srv.GetTool("chat_ask")
 	if tool == nil {
 		t.Fatal("chat_ask tool not registered")
@@ -73,7 +73,7 @@ func TestChatAskToolValidation(t *testing.T) {
 	engine := NewChatEngine(newMockAgentClient(map[string]string{}))
 	defer engine.StopAll()
 
-	srv := NewMCPServer(engine, "")
+	srv := NewMCPServer(engine, "", DefaultConfig())
 	tool := srv.GetTool("chat_ask")
 	if tool == nil {
 		t.Fatal("chat_ask tool not registered")
@@ -103,5 +103,29 @@ func TestChatAskToolValidation(t *testing.T) {
 	}
 	if parsed["error"] == "" {
 		t.Fatalf("expected error field, got %s", text.Text)
+	}
+}
+
+// TestAgentResourceReturnsAgentList verifies that the chat-machines://agents
+// MCP resource returns the configured agent list.
+func TestAgentResourceReturnsAgentList(t *testing.T) {
+	engine := NewChatEngine(newMockAgentClient(map[string]string{}))
+	defer engine.StopAll()
+
+	cfg := &Config{
+		Agents: []AgentInfo{
+			{Name: "svetik", Model: "deepseek/deepseek-v4-flash"},
+			{Name: "baron", Model: "deepseek/deepseek-v4-pro"},
+		},
+	}
+	srv := NewMCPServer(engine, "", cfg)
+
+	res := srv.ListResources()
+	item, ok := res["chat-machines://agents"]
+	if !ok {
+		t.Fatalf("expected agents resource, got %v", res)
+	}
+	if item.Resource.URI != "chat-machines://agents" {
+		t.Fatalf("expected agents resource URI, got %q", item.Resource.URI)
 	}
 }

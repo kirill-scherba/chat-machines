@@ -47,6 +47,9 @@ func main() {
 
 	log.Printf("%s %s starting (opencode=%s, http=%q, external=%q)", appName, appVersion, *opencodeURL, *httpAddr, *externalAddr)
 
+	// Load agent registry configuration
+	config := LoadOrDefault(func(format string, args ...any) { log.Printf(format, args...) })
+
 	// Create agent client
 	agentClient := NewAgentClient(*opencodeURL, *messageTimeout)
 
@@ -70,7 +73,7 @@ func main() {
 	engine.SetSummaryAutoSave(*autoSave)
 
 	// Create MCP server
-	mcpServer := NewMCPServer(engine, *externalBaseURL)
+	mcpServer := NewMCPServer(engine, *externalBaseURL, config)
 
 	// Start external HTTP endpoint for non-opencode participants.
 	if *externalAddr != "" {

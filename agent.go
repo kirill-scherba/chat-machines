@@ -57,7 +57,7 @@ type SessionInfo struct {
 }
 
 // CreateSession calls POST /session and returns the session ID.
-func (c *AgentClient) CreateSession(name, agent, model, workDir string) (string, error) {
+func (c *AgentClient) CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error) {
 	body := map[string]any{
 		"name": name,
 	}
@@ -66,6 +66,9 @@ func (c *AgentClient) CreateSession(name, agent, model, workDir string) (string,
 	}
 	if workDir != "" {
 		body["directory"] = workDir
+	}
+	if len(permissions) > 0 {
+		body["permissions"] = permissions
 	}
 
 	raw, err := json.Marshal(body)
