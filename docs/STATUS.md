@@ -19,6 +19,7 @@
 | #14 | feat: chat_ask — synchronous agent question | ✅ Done (merged) | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
 | #16 | fix: chat_ask — session closing, logging calls to memory | ✅ Done (merged) | `enhancement`, `chat-machines`, `plan/improve`, `plan/approved` |
 | #18 | feat: agent registry config, MCP resource, and chat_ask loop protection | 🟣 In review (PR #19) | `enhancement`, `chat-machines`, `plan/approved`, `act/in-progress`, `act/review` |
+| #20 | fix: Guard code review — falling test, StopRoom race, hardcoded adjunct name | 🟡 In progress | `bug`, `chat-machines`, `plan/approved`, `act/in-progress` |
 
 ## Issue #3 — Implementation Complete
 
@@ -262,10 +263,35 @@ expects.
 
 - `go test -race ./...` — ✅
 
+## Issue #20 — Implementation In Progress
+
+### Goal
+
+Fix the three code-review findings from Guard: failing config test, StopRoom race condition, and hardcoded `"Kirill"` adjunct name.
+
+### Completed Items
+
+| # | Item | Files | Status |
+|---|---|---|---|
+| 1 | Fix `TestLoadOrDefaultMissingFile` — isolate CWD to avoid picking up repo-root `config.json` | `config_test.go` | ✅ |
+| 2 | Fix `StopRoom` race — wait for goroutine cleanup before setting `RoomStopped` | `engine.go` | ✅ |
+| 3 | Replace hardcoded `Kirill` — optional `name` parameter in `chat_join`, `chat_send` uses `AdjunctName` | `server.go` | ✅ |
+| 4 | Update Memory Bank docs (DESIGN.md, STATUS.md) | `docs/*.md` | ✅ |
+
+### Architecture Decisions
+
+- **StopRoom status ordering**: `StopRoom` no longer sets `RoomStopped` synchronously. It cancels the room context, waits for the room goroutine's `finishRoom` to complete (digest collection + session close), and only then `finishRoom` sets `RoomStopped`. This removes the window where `AddMessage` rejects in-flight messages.
+- **Backward-compatible adjunct name**: `chat_join` accepts an optional `name` parameter and defaults to `"Kirill"` so existing callers and transcripts are unchanged unless they opt in.
+- **chat_send reads AdjunctName**: The sender name comes from the room snapshot rather than a constant, honoring whatever name was provided at join time.
+
+### Verification
+
+- `go build ./...` — ✅
+- `go vet ./...` — ✅
+ - `go test ./...` — ✅
+ - `go test -race ./...` — ✅
+
 ## Last Updated
 
+2026-07-16 — Issue #20 implemented by Master; PR created and moved to In review. Memory Bank docs synced with StopRoom status ordering and chat_join name parameter.
 2026-07-15 — Issue #18 implemented by Master; PR #19 created and moved to In review. README and Memory Bank docs synced with MCP surface.
-2026-07-15 — Issue #14 implemented by Master; PR created and moved to In review.
-2026-07-08 — Issue #3 implemented by Master; PR created and moved to In review.
-2026-07-08 — Issue #5 planned, approved, moved to In progress, and PR #6 created.
-2026-07-08 — PR #6 review feedback addressed: context cancellation, safe rejoin, regression tests, docs sync.
