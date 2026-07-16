@@ -76,8 +76,13 @@ func TestLoadOrDefaultMissingFile(t *testing.T) {
 
 	// Isolate CWD: FindConfig() includes "./config.json" as fallback.
 	// The repo root has a real config.json — must chdir to temp dir.
-	orig, _ := os.Getwd()
-	os.Chdir(dir)
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
 	defer os.Chdir(orig)
 
 	cfg := LoadOrDefault(nil)

@@ -288,8 +288,8 @@ Fix the three code-review findings from Guard: failing config test, StopRoom rac
 
 - `go build ./...` — ✅
 - `go vet ./...` — ✅
- - `go test ./...` — ✅
- - `go test -race ./...` — ✅
+- `go test ./...` — ✅
+- `go test -race ./...` — ✅
 
 ## Last Updated
 
