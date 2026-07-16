@@ -46,6 +46,7 @@ Rules:
   You may participate in a chat as an adjunct:
   1. Call chat_display_format once to learn the canonical relay format.
   2. chat_join(room_id) to connect your session to the room.
+     Optionally provide name="Your Name" to identify yourself in the transcript.
   3. The engine pauses at the end of each round and waits for you.
   4. poll chat_get(room_id) for new messages.
   5. Relay messages to the user in the canonical format — no commentary, no emoji, no paraphrasing.
@@ -273,12 +274,16 @@ func chatSendTool(engine *ChatEngine) server.ServerTool {
 				since = int(v)
 			}
 
-			const fromHuman = "Kirill"
-
 			// Capture state before send so we can return delta afterwards.
 			snapBefore, ok := engine.GetRoomSnapshot(roomID)
 			if !ok {
 				return resultError(fmt.Errorf("room %s not found", roomID))
+			}
+			// Use the adjunct's registered name in the transcript; default to
+			// "Kirill" when no name was provided (preserves previous behavior).
+			fromHuman := snapBefore.AdjunctName
+			if fromHuman == "" {
+				fromHuman = "Kirill"
 			}
 			roundBefore := snapBefore.CurrentRound
 			msgCount := len(snapBefore.Messages)
@@ -329,7 +334,10 @@ func chatJoinTool(engine *ChatEngine) server.ServerTool {
 		mcp.WithDescription("Join a chat room as a human adjunct."),
 		mcp.WithString("room_id", mcp.Description("Room ID"), mcp.Required()),
 		mcp.WithString("session_id",
-			mcp.Description("Optional opencode-serve session ID for the adjunct")))
+			mcp.Description("Optional opencode-serve session ID for the adjunct")),
+		mcp.WithString("name",
+			mcp.Description("Optional human display name for transcript (default: \"Kirill\")")),
+	)
 	return server.ServerTool{
 		Tool: t,
 		Handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -338,7 +346,11 @@ func chatJoinTool(engine *ChatEngine) server.ServerTool {
 				return resultError(fmt.Errorf("room_id is required"))
 			}
 			sessionID, _ := req.GetArguments()["session_id"].(string)
-			if err := engine.SetAdjunct(roomID, sessionID, "Kirill"); err != nil {
+			name, _ := req.GetArguments()["name"].(string)
+			if name == "" {
+				name = "Kirill"
+			}
+			if err := engine.SetAdjunct(roomID, sessionID, name); err != nil {
 				return resultError(err)
 			}
 			snap, ok := engine.GetRoomSnapshot(roomID)
@@ -349,7 +361,7 @@ func chatJoinTool(engine *ChatEngine) server.ServerTool {
 				"room_id":    roomID,
 				"joined":     true,
 				"topic":      snap.Topic,
-				"adjunct":    "Kirill",
+				"adjunct":    name,
 				"session_id": sessionID,
 			})
 		},

@@ -322,8 +322,10 @@ func (e *ChatEngine) StopRoom(id string) error {
 	if !ok {
 		return fmt.Errorf("room %s is not active", id)
 	}
-	// Mark the room as stopping synchronously so MCP handlers observe a deterministic state.
-	_ = e.store.SetStatus(id, RoomStopped)
+	// Signal the goroutine to stop and wait for cleanup (including digest
+	// collection and session close). The goroutine's finishRoom sets RoomStopped
+	// only after cleanup completes; setting status here would cause AddMessage
+	// to drop any in-flight messages before the goroutine is done.
 	cancel()
 	if done != nil {
 		<-done

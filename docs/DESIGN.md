@@ -124,21 +124,22 @@ When >2 participants:
 
 When a room stops (via `chat_stop`, max rounds, or auto-stop), the engine waits synchronously for cleanup:
 
-1. The room goroutine finishes any in-progress round.
-2. Each participant is asked to write a summary.
-3. All summaries are collected and a unified digest is stored on the room (`Room.StoredDigest`).
-4. The room goroutine signals completion.
-5. `chat_stop` returns only after the digest is stored, so its response always contains the digest.
-6. `chat_get` includes the digest for stopped rooms.
-7. If `--auto-save` is true and a `SummarySaver` is configured, the digest is also saved to memory-store-mcp.
+1. `chat_stop` calls `StopRoom`, which cancels the room context.
+2. The room goroutine finishes any in-progress round; `finishRoom` then sets `RoomStopped`, collects summaries, and stores the unified digest on the room (`Room.StoredDigest`).
+3. The room goroutine signals completion.
+4. `chat_stop` returns only after the digest is stored, so its response always contains the digest.
+5. `chat_get` includes the digest for stopped rooms.
+6. If `--auto-save` is true and a `SummarySaver` is configured, the digest is also saved to memory-store-mcp.
+
+**`StopRoom` status ordering:** `StopRoom` does **not** set `RoomStopped` before waiting for the goroutine. Instead, it waits for `finishRoom` to set the status after all cleanup is complete. This prevents `AddMessage` from rejecting in-flight messages during shutdown.
 
 **Rationale:** Returning the digest must be deterministic for the caller. The engine therefore waits for summary collection before `chat_stop` returns, and auto-save is an opt-in side effect controlled by the operator.
 
 ### 7. Human-in-Chat via Adjunct
 
 Humans participate through their existing opencode session:
-- `chat_join(room_id)` registers the human session as an adjunct on the room
-- `chat_send(room_id, message)` injects a human message into the room transcript
+- `chat_join(room_id)` registers the human session as an adjunct on the room. Optional `name` parameter sets the adjunct display name; if omitted, it defaults to `"Kirill"` to preserve previous behavior.
+- `chat_send(room_id, message)` injects a human message into the room transcript using the registered adjunct name.
 - `chat_get(room_id)` is polled by Baron to relay new room messages back to the user
 - `chat_leave(room_id)` removes the adjunct
 
@@ -229,7 +230,7 @@ chat-machines \
 | `chat_list` | List active rooms |
 | `chat_get` | Get room state (includes `digest` for stopped rooms) |
 | `chat_send` | Inject a message from a human into the room (also unblocks the round cycle when an adjunct is waiting) |
-| `chat_join` | Join a room as a human adjunct |
+| `chat_join` | Join a room as a human adjunct. Optional `name` sets the display name used in the transcript (default `"Kirill"` for backward compatibility) |
 | `chat_leave` | Leave a room as a human adjunct |
 | `chat_stop` | Stop a room and return the summary digest |
 | `chat_stats` | Global chat statistics |

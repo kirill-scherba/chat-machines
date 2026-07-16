@@ -70,8 +70,21 @@ func TestConfigAgentNames(t *testing.T) {
 }
 
 func TestLoadOrDefaultMissingFile(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", dir)
+
+	// Isolate CWD: FindConfig() includes "./config.json" as fallback.
+	// The repo root has a real config.json — must chdir to temp dir.
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(orig)
+
 	cfg := LoadOrDefault(nil)
 	if cfg != nil {
 		t.Fatalf("expected nil when file missing, got %v", cfg)
