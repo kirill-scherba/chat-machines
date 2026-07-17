@@ -19,7 +19,7 @@ func TestAgentClientCreateSession(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(SessionInfo{ID: "ses_test123", Agent: "Baron"})
+		json.NewEncoder(w).Encode(map[string]string{"id": "ses_test123"})
 	}))
 	defer ts.Close()
 
@@ -43,7 +43,7 @@ func TestAgentClientCreateSessionWithPermissions(t *testing.T) {
 			t.Fatalf("decode body: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(SessionInfo{ID: "ses_perm456", Agent: "Baron"})
+		json.NewEncoder(w).Encode(map[string]string{"id": "ses_perm456"})
 	}))
 	defer ts.Close()
 
@@ -69,11 +69,14 @@ func TestAgentClientCreateSessionWithPermissions(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected permission object, got %T", permsList[0])
 	}
-	if first["prefix"] != "chat-machines*" {
-		t.Fatalf("expected prefix chat-machines*, got %v", first["prefix"])
+	if first["permission"] != "tools" {
+		t.Fatalf("expected permission=tools, got %v", first["permission"])
 	}
-	if first["deny"] != true {
-		t.Fatalf("expected deny=true, got %v", first["deny"])
+	if first["pattern"] != "chat-machines*" {
+		t.Fatalf("expected pattern chat-machines*, got %v", first["pattern"])
+	}
+	if first["action"] != "deny" {
+		t.Fatalf("expected action=deny, got %v", first["action"])
 	}
 }
 
@@ -89,15 +92,9 @@ func TestAgentClientSendMessage(t *testing.T) {
 		parts := body["parts"].([]any)
 		text := parts[0].(map[string]any)["text"].(string)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(messageResponse{
-			Info: struct {
-				ID        string `json:"id"`
-				SessionID string `json:"sessionID"`
-			}{ID: "msg_1", SessionID: "sid"},
-			Parts: []struct {
-				Type string `json:"type"`
-				Text string `json:"text,omitempty"`
-			}{{Type: "text", Text: "Echo: " + text}},
+		json.NewEncoder(w).Encode(map[string]any{
+			"info":  map[string]string{"id": "msg_1", "sessionID": "sid"},
+			"parts": []map[string]string{{"type": "text", "Text": "Echo: " + text}},
 		})
 	}))
 	defer ts.Close()
@@ -118,16 +115,10 @@ func TestAgentClientGetLastResponse(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode([]messageResponse{
+		json.NewEncoder(w).Encode([]map[string]any{
 			{
-				Info: struct {
-					ID        string `json:"id"`
-					SessionID string `json:"sessionID"`
-				}{ID: "msg_1", SessionID: "sid"},
-				Parts: []struct {
-					Type string `json:"type"`
-					Text string `json:"text,omitempty"`
-				}{{Type: "text", Text: "last"}},
+				"info":  map[string]string{"id": "msg_1", "sessionID": "sid"},
+				"parts": []map[string]string{{"type": "text", "text": "last"}},
 			},
 		})
 	}))
@@ -158,22 +149,5 @@ func TestAgentClientCloseSession(t *testing.T) {
 	c := NewAgentClient(ts.URL, 5*time.Second)
 	if err := c.CloseSession("sid"); err != nil {
 		t.Fatalf("close session: %v", err)
-	}
-}
-
-func TestSplitModel(t *testing.T) {
-	cases := []struct {
-		in           string
-		wantProvider string
-		wantModel    string
-	}{
-		{"ollama-cloud/deepseek-v4-flash", "ollama-cloud", "deepseek-v4-flash"},
-		{"deepseek-v4-flash", "", "deepseek-v4-flash"},
-	}
-	for _, tc := range cases {
-		p, m := splitModel(tc.in)
-		if p != tc.wantProvider || m != tc.wantModel {
-			t.Fatalf("splitModel(%q) = (%q, %q), want (%q, %q)", tc.in, p, m, tc.wantProvider, tc.wantModel)
-		}
 	}
 }
