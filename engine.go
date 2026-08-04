@@ -32,7 +32,7 @@ type PermissionRule struct {
 // Agent is the interface for creating sessions and sending/receiving messages.
 // It abstracts the opencode-serve HTTP client so tests can use mocks.
 type Agent interface {
-	CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error)
+	CreateSession(name, agent, model, workDir, source string, permissions []PermissionRule) (string, error)
 	SendMessage(sessionID, text, agent, model string) (string, error)
 	SendMessageAsync(sessionID, text, agent, model string) error
 	CloseSession(sessionID string) error
@@ -418,7 +418,7 @@ func (e *ChatEngine) startRoom(room *Room) error {
 			sessionIDs[i] = ""
 			continue
 		}
-		sid, err := e.agent.CreateSession(p.Name, p.Agent, p.Model, workDir, nil)
+		sid, err := e.agent.CreateSession(p.Name, p.Agent, p.Model, workDir, "chat", nil)
 		if err != nil {
 			return fmt.Errorf("create session for %s: %w", p.Name, err)
 		}
@@ -1013,7 +1013,7 @@ func (e *ChatEngine) AskAgent(agentName, question, model string) (string, error)
 	denyPerms := []PermissionRule{
 		{Prefix: "chat-machines*", Deny: true},
 	}
-	sessionID, err := e.agent.CreateSession("ask-"+agentName, agentName, model, "/tmp", denyPerms)
+	sessionID, err := e.agent.CreateSession("ask-"+agentName, agentName, model, "/tmp", "chat-ask", denyPerms)
 	if err != nil {
 		return "", fmt.Errorf("create session: %w", err)
 	}

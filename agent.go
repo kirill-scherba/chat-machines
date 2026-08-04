@@ -25,7 +25,7 @@ func NewAgentClient(baseURL string, timeout time.Duration) *AgentClient {
 }
 
 // CreateSession calls POST /session and returns the session ID.
-func (c *AgentClient) CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error) {
+func (c *AgentClient) CreateSession(name, agent, model, workDir, source string, permissions []PermissionRule) (string, error) {
 	// Convert local PermissionRule to opencodeclient.PermissionRule.
 	ocPerms := make([]opencodeclient.PermissionRule, len(permissions))
 	for i, p := range permissions {
@@ -35,7 +35,7 @@ func (c *AgentClient) CreateSession(name, agent, model, workDir string, permissi
 			Action:     denyAction(p.Deny),
 		}
 	}
-	sess, err := c.client.CreateSession(name, agent, model, workDir, ocPerms)
+	sess, err := c.client.CreateSession(name, agent, model, workDir, source, ocPerms)
 	if err != nil {
 		return "", err
 	}

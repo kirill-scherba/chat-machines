@@ -24,7 +24,7 @@ func TestAgentClientCreateSession(t *testing.T) {
 	defer ts.Close()
 
 	c := NewAgentClient(ts.URL, 5*time.Second)
-	sid, err := c.CreateSession("test", "Baron", "", "", nil)
+	sid, err := c.CreateSession("test", "Baron", "", "", "test", nil)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestAgentClientCreateSessionWithPermissions(t *testing.T) {
 
 	c := NewAgentClient(ts.URL, 5*time.Second)
 	perms := []PermissionRule{{Prefix: "chat-machines*", Deny: true}}
-	sid, err := c.CreateSession("test", "Baron", "", "", perms)
+	sid, err := c.CreateSession("test", "Baron", "", "", "test", perms)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}

@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/google/uuid v1.6.0
 	github.com/kirill-scherba/log v0.1.0
-	github.com/kirill-scherba/opencode-client v0.1.1
+	github.com/kirill-scherba/opencode-client v0.3.0
 	github.com/mark3labs/mcp-go v0.54.1
 	github.com/mattn/go-sqlite3 v1.14.24
 )

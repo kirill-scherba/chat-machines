@@ -33,7 +33,7 @@ func newMockAgentClient(responses map[string]string) *mockAgentClient {
 	}
 }
 
-func (m *mockAgentClient) CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error) {
+func (m *mockAgentClient) CreateSession(name, agent, model, workDir, source string, permissions []PermissionRule) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.createCalls++
@@ -99,7 +99,7 @@ func newRoundAwareMockAgent(responses map[string]map[int]string) *roundAwareMock
 	}
 }
 
-func (m *roundAwareMockAgent) CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error) {
+func (m *roundAwareMockAgent) CreateSession(name, agent, model, workDir, source string, permissions []PermissionRule) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.createCalls++
@@ -165,7 +165,7 @@ func newDelayingMockAgent(delays map[string]time.Duration, responses map[string]
 	}
 }
 
-func (m *delayingMockAgent) CreateSession(name, agent, model, workDir string, permissions []PermissionRule) (string, error) {
+func (m *delayingMockAgent) CreateSession(name, agent, model, workDir, source string, permissions []PermissionRule) (string, error) {
 	return "ses_" + name, nil
 }
 
